@@ -291,27 +291,38 @@
         <b>程序二</b>：拉长历史找出全部买入 / 卖出九转信号，在信号 <strong>±5 个交易日</strong>内定位真正反转日 ——
         买入记 <b>n</b>（<i>9Rev n天后开始真正反弹</i>）、卖出记 <b>m</b>（<i>9Rev 提前m天开始下行</i>），
         负值表示拐点落在信号另一侧。</p>
-      <p class="src-note">口径：收盘价连续 9 天低于 / 高于 4 个交易日前 → 买入 / 卖出九转；反转须被<strong>拐点之后</strong>的行情确认，全程不含未来函数。
+      <p class="src-note">口径：收盘价连续 9 个<strong>周期</strong>低于 / 高于 4 个周期前 → 买入 / 卖出九转；反转须被<strong>拐点之后</strong>的行情确认，全程不含未来函数。
+        <b>周期</b>可选 日线 / 周线 / 月线，三者各自独立成立（周线的「4 个周期前」= 4 周，月线 = 4 个月），
+        勾选多个即<strong>叠加筛选</strong>：各周期<strong>先分别筛选、再整体并集</strong>（叠加是加分项，不是入选门槛），
+        n / m 的单位随周期走（日 / 周 / 月），互不混算。
         <b>排序分 = 按历史样本量收缩后的平均 n</b>（越小越靠前），避免「只出现过 1 次恰好见底」的股票霸榜；K 可调，设 0 即关闭收缩。
         实测：多数卖出九转的<strong>真顶落在信号之后</strong>，更像「提前预警」而非见顶确认（比例见扫描汇总条）。</p>
     </div>
 
     <div class="controls">
       <label>「即将」= 还差 ≤
-        <input type="number" id="r9Near" value="2" min="1" max="8" step="1" /> 天到达买入九转
+        <input type="number" id="r9Near" value="2" min="1" max="8" step="1" /> 个周期到达买入九转
       </label>
-      <label class="inline"><input type="checkbox" id="r9Triggered" /> 含「今日刚好达成第 9 天」</label>
+      <label class="inline"><input type="checkbox" id="r9Triggered" /> 含「刚达成第 9 个周期」</label>
+      <label class="r9-periods-label" title="勾选多个 = 叠加筛选（并集）；各周期先分别筛选再合并，参数不跨周期复用">
+        <span class="r9-periods-cap">周期（可叠加）</span>
+        <span class="r9-periods" id="r9Periods">
+          <label class="r9-pchip"><input type="checkbox" class="r9-period-cb" value="day" checked /> 日线</label>
+          <label class="r9-pchip"><input type="checkbox" class="r9-period-cb" value="week" /> 周线</label>
+          <label class="r9-pchip"><input type="checkbox" class="r9-period-cb" value="month" /> 月线</label>
+        </span>
+      </label>
     </div>
 
     <details class="adv-params">
       <summary>⚙ 9Reverse9 参数（可调，默认即设计值）</summary>
       <div class="adv-grid">
-        <label>九转比较基准(日前) <input type="number" id="r9Gap" value="4" min="1" max="10" step="1" /></label>
-        <label>匹配容差 |n|,|m| ≤ <input type="number" id="r9Win" value="5" min="1" max="10" step="1" /></label>
-        <label title="排序分 = (Σn + K×全市场均值)/(样本数 + K)；0 = 关闭收缩，退回纯平均 n">排序收缩强度 K <input type="number" id="r9ShrinkK" value="3" min="0" max="50" step="1" /></label>
-        <label>反转确认幅度(%) <input type="number" id="r9ConfirmPct" value="3" min="0" max="50" step="0.5" /></label>
-        <label>反转确认窗口(日) <input type="number" id="r9ConfirmBars" value="10" min="1" max="60" step="1" /></label>
-        <label>历史回看(年) <input type="number" id="r9HistYears" value="5" min="1" max="25" step="1" /></label>
+        <label title="九转比较基准：close[t] 与 close[t-G] 比较。单位 = 各周期自己的 bar（日线=交易日、周线=周、月线=月）">九转比较基准(周期前) <input type="number" id="r9Gap" value="4" min="1" max="10" step="1" /></label>
+        <label title="|n|、|m| 上限，单位 = 各周期自己的 bar。叠加时各周期各自用自己的值">匹配容差 |n|,|m| ≤ <input type="number" id="r9Win" value="5" min="1" max="10" step="1" /></label>
+        <label title="排序分 = (Σn + K×该周期全市场均值)/(样本数 + K)；0 = 关闭收缩，退回纯平均 n。各周期独立计算，不跨周期平均">排序收缩强度 K <input type="number" id="r9ShrinkK" value="3" min="0" max="50" step="1" /></label>
+        <label title="拐点之后需出现的反向运动幅度">反转确认幅度(%) <input type="number" id="r9ConfirmPct" value="3" min="0" max="50" step="0.5" /></label>
+        <label title="反转确认观察窗口，单位 = 各周期的 bar 数（日线=10 天、周线=10 周、月线=10 个月）">反转确认窗口(周期) <input type="number" id="r9ConfirmBars" value="10" min="1" max="60" step="1" /></label>
+        <label title="历史回看年数，内部按周期自动换算成 bar 数">历史回看(年) <input type="number" id="r9HistYears" value="5" min="1" max="25" step="1" /></label>
         <label>最少上市天数 <input type="number" id="r9MinListed" value="120" min="0" max="2000" step="10" /></label>
         <label>最小20日均额(亿) <input type="number" id="r9MinAmt" value="0.5" min="0" max="50" step="0.5" /></label>
         <label>价格下限(元) <input type="number" id="r9MinPrice" value="2" min="0" max="100" step="1" /></label>

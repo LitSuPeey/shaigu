@@ -1304,13 +1304,13 @@ a.fut-news-title:hover { color: var(--accent-deep); text-decoration: underline; 
   gap: 14px; margin-top: 12px;
 }
 .r9-col { min-width: 0; }
-.r9-col h4 {
+.r9-col h5 {
   margin: 0 0 8px; font-size: 13px; font-weight: 600;
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
 }
-.r9-col h4 small { font-weight: 400; font-size: 11px; color: var(--ink-faint); }
-.r9-col-buy h4 { color: var(--good); }
-.r9-col-sell h4 { color: var(--bad); }
+.r9-col h5 small { font-weight: 400; font-size: 11px; color: var(--ink-faint); }
+.r9-col-buy h5 { color: var(--good); }
+.r9-col-sell h5 { color: var(--bad); }
 
 .r9-table-wrap {
   overflow-x: auto; overflow-y: hidden;
@@ -1343,13 +1343,81 @@ a.fut-news-title:hover { color: var(--accent-deep); text-decoration: underline; 
   background: var(--bg-card); border: 1px dashed var(--line);
   border-radius: var(--radius-sm);
 }
-.r9-note { margin-top: 10px; font-size: 12px; color: var(--ink-faint); }
+.r9-note { margin-top: 8px; font-size: 12px; color: var(--ink-faint); }
+
+/* ================================================================
+   9Reverse9 · 周期（日线 / 周线 / 月线，可叠加）
+   设计要点：所有周期元素只允许**换行**，绝不 position:absolute / 负边距，
+   从结构上保证「展开后文字不重叠」。
+   ================================================================ */
+/* —— 控制区：周期多选芯片 —— */
+.r9-periods-label {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.r9-periods-cap { font-size: 12.5px; color: var(--ink-soft); }
+.r9-periods { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.r9-pchip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; font-size: 12.5px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg-card); color: var(--ink-soft);
+  transition: border-color .15s, color .15s, background .15s;
+}
+.r9-pchip:hover { border-color: var(--accent); color: var(--ink); }
+.r9-pchip input { margin: 0; cursor: pointer; }
+.r9-pchip:has(input:checked) {
+  border-color: var(--accent); color: var(--accent-deep);
+  background: var(--bg-hover); font-weight: 600;
+}
+
+/* —— 卡片上的「命中周期」徽章 —— */
+.r9-pbadges { display: inline-flex; flex-wrap: wrap; gap: 4px; flex: 0 0 auto; }
+.r9-ptag {
+  display: inline-block; padding: 1px 8px; font-size: 11.5px;
+  border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg-soft); color: var(--ink-soft);
+  white-space: nowrap; font-weight: 600; line-height: 1.7;
+}
+/* 日/周/月三色区分（低饱和，不刺眼，深色主题下也清晰） */
+.r9-p-day   { border-color: #4a6fa5; color: #7fa6d9; background: rgba(74,111,165,.14); }
+.r9-p-week  { border-color: #8a6d3b; color: #d8b46a; background: rgba(138,109,59,.16); }
+.r9-p-month { border-color: #6b4a7d; color: #c08fd6; background: rgba(107,74,125,.16); }
+/* 决定名次的那个周期加星标记 */
+.r9-ptag-best { box-shadow: 0 0 0 1px currentColor inset; }
+
+/* —— 展开区：按周期分组 —— */
+.r9-pgroup { margin-top: 12px; }
+.r9-pgroup:first-child { margin-top: 6px; }
+.r9-phead {
+  margin: 0; padding: 6px 10px; font-size: 13px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 10px;
+  border-left: 3px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+.r9-phead .r9-ptag { font-size: 12px; }
+.r9-phead small { font-weight: 400; font-size: 11px; color: var(--ink-faint); }
+.r9-pstat { font-size: 11.5px; color: var(--ink-faint); }
+.r9-pstat b { font-family: var(--mono); color: var(--ink-soft); font-size: 12px; }
+
+/* 多周期提示条 */
+.r9-multitip {
+  margin-top: 6px; padding: 7px 10px; font-size: 12px; line-height: 1.6;
+  color: var(--ink-soft); background: var(--bg-soft);
+  border: 1px dashed var(--line); border-radius: var(--radius-sm);
+}
+.r9-multitip b, .r9-multitip strong { color: var(--accent-deep); }
+
+/* 汇总条里的逐周期统计（用 <br> 分行，天然不重叠） */
+.r9-sum-per { display: block; margin-top: 4px; line-height: 1.75; }
+.r9-sum-per b.r9-sum-p { color: var(--accent-deep); }
 
 /* 窄屏：指标与按钮各自换行，仍然只换行不叠压 */
 @media (max-width: 760px) {
   .r9-expand { margin-left: 0; }
   .r9-metrics { flex: 1 1 100%; }
   .r9-cols { grid-template-columns: minmax(0, 1fr); }
+  .r9-pbadges { flex: 1 1 100%; }
+  .r9-phead { flex-direction: column; align-items: flex-start; gap: 4px; }
 }
 
 

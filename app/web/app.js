@@ -653,14 +653,26 @@ function bindPatternSubTabs() {
   }));
 }
 
-// ========= 9Reverse9 · 神奇九转 =========
-// 折叠态：排名 + 代码 + 名称 + 状态 + 两个排序依据指标 + 展开按钮（flex-wrap，绝不重叠）
-// 展开态：左右两栏（买入九转 / 卖出九转）明细表，表体各自横向滚动
+// ========= 9Reverse9 · 神奇九转（日线 / 周线 / 月线，可叠加）=========
+// 折叠态：排名 + 代码 + 名称 + 命中周期标签 + 状态 + 两个排序依据指标 + 展开按钮
+//        （flex-wrap，绝不重叠）
+// 展开态：按**命中周期**分组，每组左右两栏（买入九转 / 卖出九转）明细表；
+//        每组的 n/m 单位各自标注（日 / 周 / 月），绝不混在一张表里
 let _r9Last = null;
 let _r9AllOpen = false;
 
+// 周期多选：返回选中周期（按 日→周→月 顺序），全不选时兜底为 ["day"]
+function r9Periods() {
+  const picked = [];
+  $$('#r9Periods .r9-period-cb').forEach(cb => { if (cb.checked) picked.push(cb.value); });
+  const order = ['day', 'week', 'month'];
+  return order.filter(p => picked.includes(p)).length
+    ? order.filter(p => picked.includes(p)) : ['day'];
+}
+
 function r9Cfg() {
   return {
+    periods: r9Periods(),
     near_remaining: num('#r9Near', 2),
     include_triggered: $('#r9Triggered').checked,
     ref_gap: num('#r9Gap', 4),
@@ -678,6 +690,13 @@ function r9Cfg() {
   };
 }
 
+// 周期 key → 展示元信息（单位、配色类）；与后端 PERIODS 保持一致
+const R9_PDEF = {
+  day:   { label: '日线', unit: '天', cls: 'r9-p-day' },
+  week:  { label: '周线', unit: '周', cls: 'r9-p-week' },
+  month: { label: '月线', unit: '月', cls: 'r9-p-month' },
+};
+
 // 明细表：n/m 用色阶（≤1 最强 / ≤3 中 / 其余弱；负数＝拐点在信号另一侧，单独配色）
 // 列名不进 PCT_RE，故不会被全站红绿规则误染
 function r9KClass(k) {
@@ -685,19 +704,21 @@ function r9KClass(k) {
   return k <= 1 ? 'r9-k-best' : (k <= 3 ? 'r9-k-mid' : 'r9-k-weak');
 }
 
-function r9DetailTable(recs, side) {
+// 单个周期的明细表（两张：买入 / 卖出）。unit 决定列头与文案单位（天/周/月）
+function r9DetailTable(recs, side, unit) {
   const isBuy = side === 'buy';
+  const u = unit || '天';
   if (!recs || !recs.length) {
     return `<div class="r9-empty">历史上暂无「已确认」的${isBuy ? '买入' : '卖出'}九转样本</div>`;
   }
   const head = isBuy
     ? '<tr><th>信号日</th>'
-      + '<th title="真正开始反弹的交易日（对称窗口内最低价所在日）">真正反弹日</th>'
-      + '<th title="n = 真正反弹底 − 信号日。负数表示底在信号之前，即信号滞后">n(日)</th>'
+      + `<th title="真正开始反弹的${isBuy ? 'K线' : ''}（对称窗口内最低价所在日）">真正反弹日</th>`
+      + `<th title="n = 真正反弹底 − 信号日，单位：${u}。负数表示底在信号之前，即信号滞后">n(${u})</th>`
       + '<th>信号收盘</th><th>阶段低点</th><th>记录</th></tr>'
     : '<tr><th>信号日</th>'
-      + '<th title="真正开始下行的交易日（对称窗口内最高价所在日）">真正顶部日</th>'
-      + '<th title="m = 信号日 − 真正顶部日。负数表示顶在信号之后，即信号提前预警">m(日)</th>'
+      + '<th title="真正开始下行的K线（对称窗口内最高价所在日）">真正顶部日</th>'
+      + `<th title="m = 信号日 − 真正顶部日，单位：${u}。负数表示顶在信号之后，即信号提前预警">m(${u})</th>`
       + '<th>信号收盘</th><th>阶段高点</th><th>记录</th></tr>';
   const body = recs.map(x => {
     const k = isBuy ? x.n : x.m;
@@ -714,27 +735,66 @@ function r9DetailTable(recs, side) {
     <thead>${head}</thead><tbody>${body}</tbody></table></div>`;
 }
 
-// 展开区整体（两栏 + 备注）。只在用户点开时生成 —— 见 r9FillDetail。
-function r9DetailHtml(r) {
-  const bh = r.buy_history || [];
-  const sh = r.sell_history || [];
-  const lag = r.n_lag || 0;
-  const topAfter = r.m_neg || 0;
-  const buySub = `共 ${r.buy_n || 0} 条，下表为最近 ${bh.length} 条`
+// 一个周期的完整明细块（标题 + 该周期的买入/卖出两栏）
+function r9PeriodBlock(row) {
+  const p = row.period;
+  const pd = R9_PDEF[p] || { label: p, unit: '天', cls: 'r9-p-day' };
+  const u = row.unit || pd.unit;
+  const bh = row.buy_history || [];
+  const sh = row.sell_history || [];
+  const lag = row.n_lag || 0;
+  const topAfter = row.m_neg || 0;
+  const buySub = `共 ${row.buy_n || 0} 条，下表为最近 ${bh.length} 条`
     + (lag ? `；其中 ${lag} 条真底在信号之前（信号滞后，不计入平均 n）` : '');
-  const sellSub = `共 ${r.sell_n || 0} 条，下表为最近 ${sh.length} 条`
+  const sellSub = `共 ${row.sell_n || 0} 条，下表为最近 ${sh.length} 条`
     + (topAfter ? `；其中 ${topAfter} 条真顶在信号之后（该信号属提前预警）` : '');
-  const note = r.note ? `<div class="r9-note">⚠ ${escHtml(r.note)}</div>` : '';
-  return `<div class="r9-cols">
+  const stat = `<span class="r9-pstat">`
+    + `当前 <b>${row.cur_count || 0}/9</b>`
+    + (row.triggered ? ` · <b>已达成</b>` : ` · 还差 <b>${row.remain || 0}</b>${u}`)
+    + ` · 历史K线 <b>${row.bars_hist || 0}</b> 根${pd.label === '日线' ? '' : `（${pd.label}）`}`
+    + ` · 平均n <b>${row.n_mean == null ? '—' : row.n_mean}</b>`
+    + ` · 排序分 <b>${row.n_rank == null ? '—' : row.n_rank}</b>`
+    + ` · n样本 <b>${row.n_pos || 0}/${row.buy_n || 0}</b>`
+    + ` · 卖出9转/1年 <b>${row.sell_1y || 0}</b>`
+    + (row.bar_date ? ` · 末根 <b>${row.bar_date}</b>` : '')
+    + `</span>`;
+  const note = row.note
+    ? `<div class="r9-note">⚠ ${pd.label}：${escHtml(row.note)}</div>` : '';
+  return `<div class="r9-pgroup">
+    <h4 class="r9-phead ${pd.cls}"><span class="r9-ptag">${pd.label}</span>
+      <small>n / m 单位 = <b>${u}</b>${pd.label === '日线' ? '（交易日）' : ''}</small>
+      ${stat}
+    </h4>
+    <div class="r9-cols">
       <div class="r9-col r9-col-buy">
-        <h4>买入九转 · n = 真正反弹底 − 信号日 <small>${buySub}</small></h4>
-        ${r9DetailTable(bh, 'buy')}
+        <h5>买入九转 · n = 真正反弹底 − 信号日 <small>${buySub}</small></h5>
+        ${r9DetailTable(bh, 'buy', u)}
       </div>
       <div class="r9-col r9-col-sell">
-        <h4>卖出九转 · m = 信号日 − 真正顶部日 <small>${sellSub}</small></h4>
-        ${r9DetailTable(sh, 'sell')}
+        <h5>卖出九转 · m = 信号日 − 真正顶部日 <small>${sellSub}</small></h5>
+        ${r9DetailTable(sh, 'sell', u)}
       </div>
-    </div>${note}`;
+    </div>
+  </div>${note}`;
+}
+
+// 展开区整体：按命中周期**分组**展示（叠加时一天里可能日线命中、月线也命中）
+// 只在用户点开时生成 —— 见 r9FillDetail。
+function r9DetailHtml(r) {
+  const rows = (r.period_rows && r.period_rows.length)
+    ? r.period_rows
+    : [{ period: r.period || 'day', label: r.period_label, unit: r.unit,
+         buy_history: r.buy_history, sell_history: r.sell_history,
+         buy_n: r.buy_n, sell_n: r.sell_n, n_lag: r.n_lag, m_neg: r.m_neg,
+         cur_count: r.cur_count, remain: r.remain, triggered: r.triggered,
+         bars_hist: r.bars_hist, n_mean: r.n_mean, n_rank: r.n_rank,
+         n_pos: r.n_pos, sell_1y: r.sell_1y, bar_date: r.bar_date, note: r.note }];
+  const multi = rows.length > 1;
+  const tip = multi
+    ? `<div class="r9-multitip">命中 <b>${rows.length}</b> 个周期 —— 各周期<strong>独立成立</strong>，下表按周期分组；
+       不同周期的 n / m <strong>单位不同</strong>（日 / 周 / 月），不合并计算。</div>`
+    : '';
+  return tip + rows.map(r9PeriodBlock).join('');
 }
 
 // 懒渲染：折叠态只放一个空壳，点开/批量展开时才生成明细 DOM。
@@ -749,21 +809,29 @@ function r9FillDetail(card) {
 
 function r9Card(r, idx) {
   const na = v => (v == null ? '—' : v);
-  const status = r.triggered
-    ? '<span class="r9-status r9-st-on">已达成买入九转 · 第 9 天</span>'
-    : `<span class="r9-status">即将买入九转 · 还差 <b>${r.remain}</b> 天<i>（当前 ${r.cur_count}/9）</i></span>`;
+  // 命中周期标签（叠加时逐周期显示，一眼看出是哪个级别在动）
+  const plabels = (r.periods || ['day']).map(p => {
+    const pd = R9_PDEF[p] || { label: p, cls: 'r9-p-day' };
+    const multi = (r.periods || []).length > 1;
+    const isBest = multi && r.best_period === p;
+    return `<span class="r9-ptag ${pd.cls}${isBest ? ' r9-ptag-best' : ''}"`
+      + `${isBest ? ' title="各命中周期中排序分最优（决定名次）"' : ''}>${pd.label}`
+      + `${isBest ? ' ★' : ''}</span>`;
+  }).join('');
+  const status = `<span class="r9-status">${escHtml(r.status || '')}</span>`;
   return `<div class="r9-card">
     <div class="r9-head">
       <span class="r9-rank" title="排序名次">${r.rank}</span>
       <a href="#" class="stock-link code-link r9-code" data-code="${r.code}" title="快速查看 · 站内看K线">${r.code}</a>
       <a href="${thsLink(r.code)}" target="_blank" rel="noopener noreferrer" class="stock-link name-link r9-name" title="详细查询 · 同花顺新窗口">${escHtml(r.name || '')}</a>
+      <span class="r9-pbadges">${plabels}</span>
       ${status}
       <span class="r9-metrics">
-        <span class="r9-metric" title="历史买入九转的平均 n（只统计 n≥0 的样本，n<0 属信号滞后不计入）"><i>平均n</i><b>${na(r.n_mean)}</b></span>
-        <span class="r9-metric" title="第 1 排序依据：排序分 = (Σn + K×全市场均值)/(样本数 + K)。样本少时会向全市场均值收缩，避免只有 1 次记录就以平均 n=0 霸榜"><i>排序分</i><b>${na(r.n_rank)}</b></span>
-        <span class="r9-metric" title="参与排序的 n≥0 样本数 / 全部买入九转条数（含 n<0 的滞后样本）"><i>n样本</i><b>${r.n_pos || 0}/${r.buy_n || 0}</b></span>
-        <span class="r9-metric" title="最近一年内的卖出九转条数（第 2 排序依据）"><i>卖出9转/1年</i><b>${r.sell_1y || 0}</b></span>
-        <span class="r9-metric" title="参与统计的历史K线根数"><i>K线数</i><b>${r.bars_hist || 0}</b></span>
+        <span class="r9-metric" title="历史买入九转的平均 n（只统计 n≥0 的样本；单位随命中周期）"><i>平均n</i><b>${na(r.n_mean)}</b></span>
+        <span class="r9-metric" title="第 1 排序依据：排序分 = (Σn + K×该周期全市场均值)/(样本数 + K)。叠加时取各命中周期中的最小值；样本少时会向该周期全市场均值收缩"><i>排序分</i><b>${na(r.n_rank)}</b></span>
+        <span class="r9-metric" title="参与排序的 n≥0 样本数 / 全部买入九转条数（取自排序分最优的周期）"><i>n样本</i><b>${r.n_pos || 0}/${r.buy_n || 0}</b></span>
+        <span class="r9-metric" title="最近一年内的卖出九转条数（第 2 排序依据，各命中周期之和）"><i>卖出9转/1年</i><b>${r.sell_1y || 0}</b></span>
+        <span class="r9-metric" title="参与统计的历史K线根数（取自排序分最优的周期）"><i>K线数</i><b>${r.bars_hist || 0}</b></span>
       </span>
       <button class="btn btn-ghost r9-expand" type="button">展开 ▾</button>
     </div>
@@ -786,22 +854,38 @@ function renderR9(data) {
   const p = (data && data.params) || {};
   const sk = (data && data.skip_stats) || {};
   const s = (data && data.stats) || {};
+  const per = (data && data.period_stats) || {};
+  const plist = (data && data.periods) || ['day'];
+  // 逐周期统计（每个周期的样本量级完全不同，必须分开报；不能加总）
+  const perTxt = plist.map(pk => {
+    const ps = per[pk] || {};
+    const pd = R9_PDEF[pk] || { label: pk };
+    const lag = (ps.buy_lag_pct == null) ? ''
+      : `，真底早于信号 <b>${ps.buy_lag_pct}%</b>`;
+    const top = (ps.sell_top_after_pct == null) ? ''
+      : `，真顶晚于信号 <b>${ps.sell_top_after_pct}%</b>`;
+    return `<b class="r9-sum-p">${pd.label}</b>：候选 <b>${ps.analyzable || 0}</b>/${ps.candidates || 0} 只可统计`
+      + ` · 买入样本 <b>${ps.buy_total || 0}</b>${lag} · 卖出样本 <b>${ps.sell_total || 0}</b>${top}`
+      + ` · 均n基准 <b>${ps.n_prior == null ? '—' : ps.n_prior}</b>`
+      + ((ps.thin != null) ? ` · 单样本 <b>${ps.thin}</b>` : '');
+  }).join('<br>');
+  // 跳过统计里的 [日线]/[周线]/[月线] 前缀去掉，按周期归并展示，避免刷屏
   const skTxt = Object.keys(sk).length
-    ? ' · 跳过：' + Object.entries(sk).map(([k, v]) => `${k}:${v}`).join(' / ') : '';
-  const lagTxt = (s.buy_lag_pct == null) ? ''
-    : ` · 买入样本中 <b>${s.buy_lag_pct}%</b> 的真底落在信号<strong>之前</strong>（信号滞后）`;
-  const sellTxt = (s.sell_top_after_pct == null) ? ''
-    : ` · 卖出样本中 <b>${s.sell_top_after_pct}%</b> 的真顶落在信号<strong>之后</strong>（属提前预警）`;
+    ? ' · 跳过（按周期同名合并）：' + Object.entries(sk)
+      .map(([k, v]) => `${k.replace(/^\[[^\]]+\]/, '')}:${v}`)
+      .filter((v, i, a) => a.indexOf(v) === i).join(' / ') : '';
   const rankTxt = (s.shrink_k == null) ? ''
-    : ` · 排序分 = (Σn + ${s.shrink_k}×全市场均值 ${s.n_prior}) / (样本数 + ${s.shrink_k})`
-      + ((s.thin != null) ? `（${s.thin} 只只有 1 个样本，已被收缩拉回）` : '');
+    : ` · 排序分 = (Σn + ${s.shrink_k}×该周期全市场均值) / (样本数 + ${s.shrink_k})`
+      + `，各周期独立计算，叠加时取名次最优者`;
   if (sum) {
+    const pTxt = plist.map(pk => (R9_PDEF[pk] || { label: pk }).label).join(' + ');
     sum.hidden = false;
     sum.innerHTML = `共 <b>${rows.length}</b> 只 · 数据截止 <b>${data.ref_date || '—'}</b>`
-      + ` · 「即将」还差 ≤ <b>${p.near_remaining}</b> 天`
+      + ` · 周期 <b>${pTxt}</b>`
+      + ` · 「即将」还差 ≤ <b>${p.near_remaining}</b> 个周期`
       + ` · |n|,|m| ≤ <b>${p.match_window}</b> · 历史回看 <b>${p.hist_years}</b> 年`
       + ` · 用时 <b>${data.elapsed || 0}s</b>`
-      + `<span class="r9-sum-note">${rankTxt}${lagTxt}${sellTxt}${skTxt}</span>`;
+      + `<span class="r9-sum-note"><span class="r9-sum-per">${perTxt}</span>${rankTxt}${skTxt}</span>`;
   }
   const shown = rows.slice(0, R9_RENDER_MAX);
   _r9Last = data;        // 明细懒渲染时按 data-idx 回查，必须先落好引用
@@ -844,7 +928,11 @@ function r9ToggleAll() {
 async function runR9() {
   hideMeme('r9Meme');
   const cfg = r9Cfg();
-  showOverlay('loading', '9Reverse9：程序一全市场九转计数 → 程序二历史反转统计…', { cancellable: true });
+  const pTxt = cfg.periods.map(p => (R9_PDEF[p] || { label: p }).label).join(' + ');
+  const multi = cfg.periods.length > 1;
+  showOverlay('loading',
+    `9Reverse9：程序一按 ${pTxt} ${multi ? '分别' : ''}筛选 → 程序二历史反转统计…`,
+    { cancellable: true });
   try {
     const data = await API.r9Run({ cfg, exchange: rangeVal() });
     hideOverlay();
@@ -856,14 +944,20 @@ async function runR9() {
     _r9Last = data;
     const rows = (data && data.results) || [];
     if (!rows.length) {
-      showMeme('r9Meme', 'empty', '这轮没有「即将买入九转」的股票',
-        '把「还差天数」放宽、勾选「含今日刚达成第 9 天」，或换一个范围再试');
+      showMeme('r9Meme', 'empty', `这轮没有「即将买入九转」的股票（${pTxt}）`,
+        '把「还差周期数」放宽、勾选「含刚达成第 9 个周期」，或加选/换一个周期再试');
       renderR9(data);
       return;
     }
     const top = rows.slice(0, 3).map(r => r.name || r.code).join('、');
-    showMeme('r9Meme', 'success', `${rows.length} 只即将 / 已达成买入九转 🔁`,
-      `最优：${top} · 数据截止 ${data.ref_date || '—'}`);
+    // 命中周期分布：多周期叠加时，一眼看出各周期各贡献了多少只
+    const hit = {};
+    rows.forEach(r => (r.periods || []).forEach(p => { hit[p] = (hit[p] || 0) + 1; }));
+    const hitTxt = Object.keys(hit).length
+      ? ' · 命中：' + Object.keys(R9_PDEF).filter(p => hit[p])
+        .map(p => `${R9_PDEF[p].label} ${hit[p]}`).join(' / ') : '';
+    showMeme('r9Meme', 'success', `${rows.length} 只即将 / 已达成买入九转 🔁（${pTxt}）`,
+      `最优：${top} · 数据截止 ${data.ref_date || '—'}${hitTxt}`);
     renderR9(data);
   } catch (e) {
     hideOverlay();
@@ -887,38 +981,72 @@ function downloadR9Csv() {
     return;
   }
   const st = d.stats || {};
-  const head = ['排名', '代码', '名称', '板块', '当前买入计数', '还差天数', '已达成',
+  const per = d.period_stats || {};
+  const plist = d.periods || ['day'];
+  const pTxt = plist.map(pk => (R9_PDEF[pk] || { label: pk }).label).join('+');
+  const head = ['日期', '排名', '代码', '名称', '板块', '命中周期', '最优周期',
+    '当前买入计数', '还差周期数', '已达成', '单位',
     '历史买入9转数', '平均n(仅n≥0)', '排序分', 'n≥0样本数',
     '买入样本中真底早于信号的条数',
-    '近一年卖出9转数', '历史卖出9转数', '卖出样本中真顶晚于信号的条数', 'K线数', '收盘'];
-  const lines = d.results.map(r => [r.rank, r.code, r.name, r.sector, r.cur_count,
-    r.triggered ? 0 : r.remain, r.triggered ? '是' : '',
-    r.buy_n || 0, r.n_mean == null ? '' : r.n_mean,
-    r.n_rank == null ? '' : r.n_rank, r.n_pos || 0,
-    r.n_lag || 0, r.sell_1y || 0, r.sell_n || 0, r.m_neg || 0,
-    r.bars_hist || 0, r.close].map(csvCell).join(','));
-  const meta = [
-    ['口径', '数据截止', d.ref_date || '', '窗口', '|n|,|m| ≤ ' + ((d.params || {}).match_window || '')],
-    ['口径', '排序分公式', '(Σn + K×全市场均值) / (样本数 + K)，K=' + (st.shrink_k == null ? '' : st.shrink_k)
-      + '，全市场均值=' + (st.n_prior == null ? '' : st.n_prior) + '（只统计 n≥0 样本）'],
-    ['口径', '只有 1 个样本的只数', st.thin == null ? '' : st.thin],
-    ['口径', '买入样本总数', st.buy_total == null ? '' : st.buy_total,
-      '其中真底早于信号', st.buy_lag_pct == null ? '' : st.buy_lag_pct + '%'],
-    ['口径', '卖出样本总数', st.sell_total == null ? '' : st.sell_total,
-      '其中真顶晚于信号', st.sell_top_after_pct == null ? '' : st.sell_top_after_pct + '%'],
-  ].map(r => r.map(csvCell).join(','));
-  const detail = ['', '—— 历史九转明细 ——', '代码,名称,类型,信号日,真正反转日,n或m(日),记录'];
-  d.results.forEach(r => {
-    (r.buy_history || []).slice().reverse().forEach(x =>
-      detail.push([r.code, r.name, '买入九转', x.date, x.rev_date, x.n, x.text].map(csvCell).join(',')));
-    (r.sell_history || []).slice().reverse().forEach(x =>
-      detail.push([r.code, r.name, '卖出九转', x.date, x.rev_date, x.m, x.text].map(csvCell).join(',')));
+    '近一年卖出9转数', '历史卖出9转数', '卖出样本中真顶晚于信号的条数',
+    'K线数', '末根日期', '收盘'];
+  const lines = d.results.map(r => {
+    const lbl = (r.period_labels || []).join('/');
+    const best = r.best_period ? ((R9_PDEF[r.best_period] || {}).label || r.best_period) : '';
+    return [d.ref_date || '', r.rank, r.code, r.name, r.sector, lbl, best, r.cur_count,
+      r.triggered ? 0 : r.remain, r.triggered ? '是' : '', r.unit || '',
+      r.buy_n || 0, r.n_mean == null ? '' : r.n_mean,
+      r.n_rank == null ? '' : r.n_rank, r.n_pos || 0,
+      r.n_lag || 0, r.sell_1y || 0, r.sell_n || 0, r.m_neg || 0,
+      r.bars_hist || 0, r.bar_date || '', r.close].map(csvCell).join(',');
   });
-  const csv = '\ufeff' + [head.join(','), ...lines, ...meta, ...detail].join('\n');
+  // 口径段落：逐周期分开列（各周期量纲不同，绝不把 n 平均值跨周期合并）
+  const meta = [
+    ['口径', '数据截止', d.ref_date || '', '周期', pTxt,
+      '窗口(|n|,|m|)', '|n|,|m| ≤ ' + ((d.params || {}).match_window || '')],
+    ['口径', '叠加规则', '各周期先分别筛选、再整体并集；参数不跨周期复用（避免用「还差 2 日」限制月线）'],
+    ['口径', '排序分公式', '(Σn + K×该周期全市场均值) / (样本数 + K)，K='
+      + (st.shrink_k == null ? '' : st.shrink_k) + '，各周期独立计算，叠加时取名次最优者'],
+  ];
+  plist.forEach(pk => {
+    const ps = per[pk] || {};
+    const pd = R9_PDEF[pk] || { label: pk, unit: '天' };
+    meta.push([`周期:${pd.label}`, '候选(可统计/命中)',
+      (ps.analyzable || 0) + '/' + (ps.candidates || 0),
+      '单位', pd.unit,
+      '买入样本总数', ps.buy_total == null ? '' : ps.buy_total,
+      '其中真底早于信号', ps.buy_lag_pct == null ? '' : ps.buy_lag_pct + '%']);
+    meta.push([`周期:${pd.label}`, '卖出样本总数', ps.sell_total == null ? '' : ps.sell_total,
+      '其中真顶晚于信号', ps.sell_top_after_pct == null ? '' : ps.sell_top_after_pct + '%',
+      'n均值基准', ps.n_prior == null ? '' : ps.n_prior,
+      '单样本只数', ps.thin == null ? '' : ps.thin]);
+  });
+  const metaLines = meta.map(r => r.map(csvCell).join(','));
+  // 明细段落：带「周期」列，单位随周期标注（日/周/月），绝不混算
+  const detail = ['', '—— 历史九转明细（按周期分组，单位随周期） ——',
+    '代码,名称,周期,单位,类型,信号日,真正反转日,n或m,记录'];
+  d.results.forEach(r => {
+    const rows = (r.period_rows && r.period_rows.length)
+      ? r.period_rows
+      : [{ period: r.period || 'day', unit: r.unit,
+           buy_history: r.buy_history, sell_history: r.sell_history }];
+    rows.forEach(pr => {
+      const pd = R9_PDEF[pr.period] || { label: pr.period, unit: pr.unit || '天' };
+      const u = pr.unit || pd.unit;
+      (pr.buy_history || []).slice().reverse().forEach(x =>
+        detail.push([r.code, r.name, pd.label, u, '买入九转', x.date, x.rev_date, x.n, x.text]
+          .map(csvCell).join(',')));
+      (pr.sell_history || []).slice().reverse().forEach(x =>
+        detail.push([r.code, r.name, pd.label, u, '卖出九转', x.date, x.rev_date, x.m, x.text]
+          .map(csvCell).join(',')));
+    });
+  });
+  const csv = '\ufeff' + [head.join(','), ...lines, ...metaLines, ...detail].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = '9Reverse9_' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.download = '9Reverse9_' + (plist.join('-')) + '_'
+    + new Date().toISOString().slice(0, 10) + '.csv';
   a.click();
   URL.revokeObjectURL(a.href);
 }
