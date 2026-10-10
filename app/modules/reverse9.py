@@ -31,11 +31,25 @@ K 线粒度上的实例，各自独立成立：
 指 2 个月，量纲完全不同，混用会把月线信号全部误杀。本模块用
 「每周期一个独立 cfg 副本」（`_period_cfg`）从根本上杜绝该问题。
 
-程序一：筛选「即将到达买入九转」的股票（逐周期独立执行）
-======================================================
-当前买入计数 c ∈ [9-N, 8]（N = near_remaining，默认 2 → 即 c ∈ {7, 8}）。
-N=1 只留「还差 1 天」；N=3 放宽到「还差 3 天以内」。c=9（今日刚好达成）默认不计入
-（可开 include_triggered），因为它已经不是「即将」而是「到达」。
+程序一：筛选符合条件的股票（逐周期独立执行，三个维度**并存可取并集**）
+====================================================================
+以「截至参考日 ref_date 的买入九转游程长度 R = rb[-1]」为唯一状态量，
+三个维度各自独立成立，同时勾选则取并集（与多周期叠加同理，都是充分非必要条件）：
+
+  ① 即将到达：当前计数 c ∈ [9-N, 8]（N = near_remaining，默认 2 → c ∈ {7,8}）
+     N=1 只留「还差 1 天」；N=3 放宽到「还差 3 天以内」。
+     ⚠ c=9（今日刚好达成）默认**不**计入，因为它已经不是「即将」而是「到达」
+       —— 要它请开 include_triggered。
+  ② 已达成第 9 个：c=9 且游程恰好停在 9（即 `include_triggered`）。
+  ③ 已达成后 x 根（本模块的 after_days，x ∈ {1,2,3} 可多选）：
+     **信号日之后第 x 个 bar** 仍在同一段游程里，即 R = 9 + x。
+     口径：信号当天记为第 0 天，不含信号当天；x=1 即信号后第 1 个周期。
+     ⚠ 与 ① 的关系：① 是「还没到 9」（R ≤ 8），③ 是「已经过了 9」（R ≥ 10），
+       两者在 R 上**互斥不重叠**；②（R=9）夹在中间。三者取并集时不会重复计数。
+     ⚠ 只认 R = 9+x：若 R = 13（已过 4 天）而用户只选 x ∈ {1,2,3}，**不入选**。
+       这正是「已经到达 9 转日期 x 天」的字面含义 —— 它筛的是**特定时间点**，
+       不是「至少过了 x 天」。需要更宽的口径请自行调大 x 的取值集合。
+
 「当前」统一锚定在**参考日 ref_date**：覆盖率 ≥80% 的最新交易日。
 （unified_data.db 最近两天常常只有部分股票同步完成，若各股各用最后一根，
  计数口径会不一致 → 用覆盖率闸门挑一个全市场都有的日期，口径统一。）
@@ -64,6 +78,14 @@ N=1 只留「还差 1 天」；N=3 放宽到「还差 3 天以内」。c=9（今
 
 排序（严格照用户给定的优先级，逐级生效）
 ======================================
+排序分**两层**，先看「维度档」，再看历史 n：
+
+【第 0 层 · 维度优先级】**仅当同时勾选 ≥2 个维度（多维度并集）时启用**
+  档 0 当天九转（刚好第 9 个）  >  档 1 即将（还差 ≤N）  >  档 2 已过九转（9+x）
+  档内 ③ 再按 x 升序（已过 1 天排在已过 3 天之前：越接近信号日越靠前）。
+  单维度时不启用分桶 —— 桶内只有一类，分桶与不分桶等价，加了只会平添一层概念。
+
+【第 1 层 · 历史 n】
  1st 历史买入九转的 n 越小越靠前   → 主键 = **仅统计 n ≥ 0 样本**的平均 n 升序。
       （n < 0 表示信号发出时反弹已经开始、属滞后信号，混进均值会让
         「信号越滞后排得越前」，与用户意图相反，故单列展示、不计入主键。）
@@ -75,6 +97,7 @@ N=1 只留「还差 1 天」；N=3 放宽到「还差 3 天以内」。c=9（今
  2nd 一年内卖出九转信号越多越靠前   → 次键 = 近一年卖出九转条数降序
  3rd 代码升序（仅作稳定收尾）
 多周期叠加时：主键取各命中周期中**最优（最小）**的排序分，次键取各周期卖出九转条数之和，
+维度档同样取各周期中的**最优（最小）档**，
 并在前端把「命中周期」与「各周期的 n/m」分别列出，不把不同量纲的 n 混在一个均值里。
 
 性能
@@ -105,6 +128,7 @@ MIN_RECENT_BARS = 15      # 少于该根数无法算九转计数，直接跳过
 MIN_HIST_BARS = 60        # 程序二回看下限（**换算到各周期的 bar 数**）：太短没必要统计「历史」
 FULL_COVERAGE = 0.80      # 参考日覆盖率闸门（80% 的股票都有当天数据）
 MAIN_LEN = 9              # 神奇九转周期长度
+AFTER_DAYS_ALLOWED = (1, 2, 3)   # 「已达成后 x 根」允许的 x 取值（用户指定 1/2/3）
 
 # ---- 周期定义 ----
 # 每个周期一个独立小配置：取数窗口、最少 bar 数、九转基准的默认值、n/m 的单位名。
@@ -141,8 +165,17 @@ DEFAULTS = {
     # —— 周期选择 ——
     "periods": ["day"],         # 可叠加：["day","week","month"] 表示并集筛选
     # —— 程序一：「即将」定义（单位 = 各周期自己的 bar）——
-    "near_remaining": 2,        # 距买入九转还差 ≤ N 个周期（2 → 当前计数 ∈ {7,8}）
-    "include_triggered": False,  # 是否把「刚达成第 9 个周期」也纳入
+    # ① near_remaining：距买入九转还差 ≤ N 个周期（2 → 当前计数 ∈ {7,8}）。
+    #    ⚠ **设 0 表示关闭该维度**（不再筛「即将」）。三个维度至少要开一个，
+    #      全关时 run() 会强制把 ① 打开（否则筛不出任何东西，是无效输入而非「空结果」）。
+    "near_remaining": 2,
+    "include_triggered": False,  # ② 是否把「刚好达成第 9 个周期」也纳入
+    # ③ 已达成第 9 个之后过了 x 个周期（**信号日之后第 x 个 bar**，x=1 → 信号次日）。
+    #    可多选，取并集；空列表 / None / [] = **关闭**该维度。合法值只有 1/2/3。
+    # ⚠ **默认 []（关闭）**，即默认行为与加这个功能之前**完全一致**（只看「即将」）。
+    #   若默认 [1,2,3]，默认候选集就会平白多出一批「已过」的股票（日线 58 → 103 只），
+    #   属于**破坏性默认值变更** —— 想看的用户自己勾一下即可。
+    "after_days": [],
     "ref_gap": 4,               # 九转比较基准：close[t] vs close[t-ref_gap]（单位同周期）
     # —— 程序二：反转定位与确认（单位 = 各周期自己的 bar）——
     "match_window": 5,          # |n|、|m| 上限（默认 5，可调；单位同周期）
@@ -171,6 +204,10 @@ DOC_LINES = [
     "神奇九转：close 连续 9 个周期低于 / 高于 4 个周期前 → 买入 / 卖出九转。",
     "周期可选 日线 / 周线 / 月线，各自独立成立；「4 个周期前」在周线是 4 周、月线是 4 个月。",
     "程序一：按每个**选中的周期**分别筛出「即将到达买入九转」的股票，再整体并集（叠加非门槛）。",
+    "程序一另有两个并列维度：②「刚好达成第 9 个」；③「已达成后 x 个周期」（x = 信号日之后第 x 根 bar）。",
+    "三个维度并存、可同时勾选取并集：① 还差 ≤N 个（未到 9）；② 刚好第 9 个；③ 已过 1/2/3 个。",
+    "⚠ ③ 只认恰好过了 x 个周期：已过 4 个而只选了 x=1/2/3 时不入选（筛的是时间点，不是「至少过了 x」）。",
+    "排序：同时勾选 ≥2 个维度时先按「当天九转 > 即将 > 已过九转」分档，档内再按历史 n 升序；单维度时不分档。",
     "程序二：对候选股拉长历史，找出该周期历史上全部九转信号，在对称窗口内定位真正的顶 / 底。",
     "买入九转：n = 真底 − 信号日；卖出九转：m = 信号日 − 真顶。单位随周期变（日 / 周 / 月）。",
     "叠加时各周期**先分别筛选、再合并**，参数不跨周期复用（避免用「还差 2 日」限制月线）。",
@@ -348,6 +385,8 @@ def screen(cfg: dict, exchange: Optional[str], sectors: Optional[list],
     每一项的含义都以 `period` 为单位：
       cur_count  当前买入计数（还差 9-cnt  **个该周期 bar** 到达九转）
       remain     还差几个该周期 bar
+      after_x    ③ 维度命中的 x（已达成后第 x 个周期）；未命中该维度则为 None
+      sig_date   ③ 维度下「达成第 9 个」的那个 bar 的日期（= dts[-1-x]）
     """
     pdef = PERIODS.get(period) or PERIODS["day"]
     # 日线窗口必须足够长，才能重采样出足够的周/月线 bar：
@@ -389,7 +428,10 @@ def screen(cfg: dict, exchange: Optional[str], sectors: Optional[list],
 
     gap = int(cfg["ref_gap"])
     near = int(cfg["near_remaining"])
-    lo_cnt = max(1, MAIN_LEN - near)
+    # near == 0 → ① 维度关闭（用户只想看「已达成 / 已过」）
+    near_on = near > 0
+    lo_cnt = max(1, MAIN_LEN - near) if near_on else None
+    after_days = _norm_after_days(cfg.get("after_days"))   # ③ 维度（空 = 关闭）
     min_recent = int(pdef["min_recent"])
 
     out: list = []
@@ -434,10 +476,25 @@ def screen(cfg: dict, exchange: Optional[str], sectors: Optional[list],
             skip["数据异常"] = skip.get("数据异常", 0) + 1
             continue
         _sb, _ss, rb, _rs = nine_state(cl_, gap)
-        cnt, trig = current_count(int(rb[-1]))
-        ok = (trig and cfg["include_triggered"]) or (lo_cnt <= cnt <= MAIN_LEN - 1)
-        if not ok:
+        run_last = int(rb[-1])
+        cnt, trig = current_count(run_last)
+        # —— 三个维度各自独立判定，任一命中即入选（并集）——
+        # ① 即将：还没到 9（cnt ∈ [lo_cnt, 8]）；near_on=False 时该维度关闭
+        hit_near = bool(near_on and lo_cnt <= cnt <= MAIN_LEN - 1)
+        # ② 刚好达成第 9 个：游程恰好停在 9（cnt 被 current_count 归约成 9 且 trig）
+        hit_trig = bool(trig and cfg["include_triggered"])
+        # ③ 已达成后 x 个周期：**只认 R == 9 + x**。
+        #    ⚠ 不能用 cnt（10→1、11→2 会被归约成「新一轮第 1/2 天」，语义完全不同）；
+        #    ⚠ 也不写成 R >= 9 + min(x)（那会把「已过 4 天」也算进来，与字面口径不符）。
+        after_x = None
+        if after_days and run_last > MAIN_LEN:
+            dx = run_last - MAIN_LEN
+            if dx in after_days:
+                after_x = dx
+        if not (hit_near or hit_trig or after_x is not None):
             continue
+        # ③ 的信号日 = 参考 bar 往前推 x 根（同周期同日期序列，直接下标访问）
+        sig_idx = (len(dts) - 1 - after_x) if after_x is not None else None
         out.append({
             "code": code,
             "name": r[1] or "",
@@ -451,6 +508,14 @@ def screen(cfg: dict, exchange: Optional[str], sectors: Optional[list],
             "remain": int(MAIN_LEN - cnt) if not trig else 0,
             "triggered": bool(trig),
             "close": round(float(cl_[-1]), 2),
+            # —— ③ 维度相关 ——
+            "run_last": run_last,                       # 原始游程（9+x），便于复核
+            "after_x": after_x,                         # 命中的 x；未命中为 None
+            "sig_date": (dts[sig_idx] if sig_idx is not None and sig_idx >= 0 else None),
+            "sig_close": (round(float(cl_[sig_idx]), 2)
+                          if sig_idx is not None and sig_idx >= 0 else None),
+            "hit_near": bool(hit_near),
+            "hit_triggered": bool(hit_trig),
         })
     return out, skip, ref_date
 
@@ -606,6 +671,12 @@ def _period_row(it: dict, period: str) -> dict:
         "cur_count": it.get("cur_count"),
         "remain": it.get("remain"),
         "triggered": it.get("triggered"),
+        "run_last": it.get("run_last"),
+        "after_x": it.get("after_x"),
+        "sig_date": it.get("sig_date"),
+        "sig_close": it.get("sig_close"),
+        "hit_near": it.get("hit_near"),
+        "hit_triggered": it.get("hit_triggered"),
         "close": it.get("close"),
         "bars_hist": it.get("bars_hist"),
         "buy_n": it.get("buy_n"),
@@ -626,9 +697,32 @@ def _period_row(it: dict, period: str) -> dict:
 
 
 # ================================================================ 主入口
+def _norm_after_days(v) -> list:
+    """规整「已达成后 x 根」的 x 集合：只保留 AFTER_DAYS_ALLOWED 内的整数、升序去重。
+
+    空 / None / 全非法 → 返回 **空列表**（该维度关闭），**不**回退成默认全选
+    —— 用户明确取消勾选时必须真的关掉，否则界面上「我明明取消了却还在筛」。
+    """
+    if v is None:
+        return []
+    if isinstance(v, (int, float, str)):
+        v = [v]
+    out: list = []
+    for x in v:
+        try:
+            xi = int(x)
+        except Exception:  # noqa: BLE001 —— 非法值静默丢弃
+            continue
+        if xi in AFTER_DAYS_ALLOWED and xi not in out:
+            out.append(xi)
+    return sorted(out)
+
+
 def _clamp_cfg(c: dict) -> dict:
     """参数钳制（对齐各字段的合法区间）。"""
-    c["near_remaining"] = int(max(1, min(8, int(c["near_remaining"]))))
+    # ① near_remaining 允许 0 = 关闭该维度（范围 0~8；0 时 lo_cnt 无意义，由 screen 跳过）
+    c["near_remaining"] = int(max(0, min(8, int(c["near_remaining"]))))
+    c["after_days"] = _norm_after_days(c.get("after_days"))
     c["ref_gap"] = int(max(1, min(10, int(c["ref_gap"]))))
     c["match_window"] = int(max(1, min(10, int(c["match_window"]))))
     c["confirm_bars"] = int(max(1, min(60, int(c["confirm_bars"]))))
@@ -669,6 +763,33 @@ def _per_period_stats(cands: list, cut_1y: str, show_records: int) -> tuple:
     return tot_n, tot_lag, tot_s, tot_mneg
 
 
+def _after_x_sort_key(it: dict) -> tuple:
+    """③ 维度内部再按 x 升序（已过 1 天排在已过 3 天之前）。
+
+    用户口径「已过九转（谁先后都行）」没有指定 x 之间怎么排，取「信号更新鲜的靠前」，
+    与「当天 > 即将 > 已过」的直觉一致（越接近信号日越靠前）。
+    """
+    ax = it.get("after_x")
+    return (ax if ax is not None else 9e9,)
+
+
+def _dim_bucket(it: dict) -> int:
+    """维度优先级档位：0 = 当天九转（最高） / 1 = 即将 / 2 = 已过 / 9 = 都没有。
+
+    一只股票在**同一周期**内可能同时命中多个维度吗？不会：三个维度的判据建立在
+    同一个 `run_last` 上且互斥（① R ≤ 8、② R = 9、③ R ≥ 10），故档位唯一。
+    但**多周期**下各周期可能落在不同档（日线已过、周线即将）→ 取**最优（最小）档**，
+    与 n_rank 取 min 的做法一致。
+    """
+    if it.get("hit_triggered"):
+        return 0
+    if it.get("hit_near"):
+        return 1
+    if it.get("after_x") is not None:
+        return 2
+    return 9
+
+
 def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
         sectors: Optional[list] = None, progress_cb=None) -> dict:
     """9Reverse9 全流程（多周期）：逐周期独立筛 → 各自统计 → 合并 → 排序。
@@ -684,6 +805,15 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
             c[k] = v
     c = _clamp_cfg(c)
     periods = _norm_periods(c.get("periods"))
+
+    # 三个维度至少要开一个：全关时筛选结果必然为空，那是**无效输入**而非「今日无信号」。
+    # 这里强制打开 ①（并把 defaults.forced_near 记进 meta，让前端能提示用户），
+    # 而不是静默返回空列表 —— 后者会让人误以为「今天确实没有股票符合」。
+    forced_near = False
+    if (not int(c["near_remaining"]) and not c.get("include_triggered")
+            and not (c.get("after_days") or [])):
+        c["near_remaining"] = 2
+        forced_near = True
 
     t0 = time.time()
     rconn = db.reader()
@@ -785,7 +915,13 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
             "near_remaining": cp["near_remaining"], "match_window": cp["match_window"],
             "confirm_bars": cp["confirm_bars"], "ref_gap": cp["ref_gap"],
             "hist_years": cp["hist_years"], "hist_bars": hist_bars,
+            "after_days": list(cp.get("after_days") or []),
+            "include_triggered": bool(cp.get("include_triggered")),
             "candidates": len(cs), "analyzed": n_hit,
+            # 各维度命中只数（并集去重前会重叠，故分别计数，不求和）
+            "hit_near": sum(1 for x in cs if x.get("hit_near")),
+            "hit_triggered": sum(1 for x in cs if x.get("hit_triggered")),
+            "hit_after": sum(1 for x in cs if x.get("after_x") is not None),
         }
 
     # ---- ③ 逐周期算「收缩后的排序分」（必须在合并之前算，因为 prior 是该周期自己的）----
@@ -819,6 +955,8 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
     # bars_hist / buy_n / n_mean 等字段），同时把每个周期的完整记录放进 `by_period`
     # 与 `period_rows`（含单位），供前端分周期展示明细。**不同周期的 n 绝不合并求均值**。
     TOP_FIELDS = ("cur_count", "remain", "triggered", "bar_date", "close",
+                  "run_last", "after_x", "sig_date", "sig_close",
+                  "hit_near", "hit_triggered",
                   "bars_hist", "buy_n", "sell_n", "pending_buy", "pending_sell",
                   "n_pos", "n_lag", "n_pos_sum", "n_mean", "n_min", "n_max",
                   "m_pos", "m_neg", "sell_1y", "note")
@@ -877,24 +1015,65 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
                              for p in slot["periods"])
         # 命中周期标签串（供前端一行展示）
         slot["period_labels"] = [PERIODS[p]["label"] for p in slot["periods"]]
+        # 维度优先级档（多周期取最优档）；仅用于多维度并集排序
+        slot["dim_bucket"] = min(_dim_bucket(slot["by_period"][p])
+                                 for p in slot["periods"])
+        # ③ 档内再按 x 升序
+        xs = [slot["by_period"][p].get("after_x") for p in slot["periods"]
+              if slot["by_period"][p].get("after_x") is not None]
+        slot["after_x_best"] = min(xs) if xs else None
 
-    cands = sorted(merged.values(), key=lambda r: (
-        r.get("n_rank") if r.get("n_rank") is not None else INF,
-        -(r.get("sell_1y") or 0),
-        r["code"],
-    ))
+    # 排序：是否启用「维度优先」分桶 = 多维度并集时才启用（用户口径）。
+    # 判据用**实际开启**的维度数，而不是「结果里恰好出现的维度」：
+    # 后者会随当天行情漂移，导致排序规则今天生效明天不生效，用户无法预期。
+    # （near_remaining=0 视为 ① 关闭，此时单选 ③ 就不该分桶。）
+    dim_active = (1 if c["include_triggered"] else 0) + \
+                 (1 if (c.get("after_days") or []) else 0) + \
+                 (1 if int(c["near_remaining"]) > 0 else 0)
+    use_bucket = dim_active >= 2
+    if use_bucket:
+        cands = sorted(merged.values(), key=lambda r: (
+            r.get("dim_bucket", 9),                       # 0 当天 > 1 即将 > 2 已过
+            r.get("after_x_best") if r.get("after_x_best") is not None else -1,
+            r.get("n_rank") if r.get("n_rank") is not None else INF,
+            -(r.get("sell_1y") or 0),
+            r["code"],
+        ))
+    else:
+        cands = sorted(merged.values(), key=lambda r: (
+            r.get("n_rank") if r.get("n_rank") is not None else INF,
+            -(r.get("sell_1y") or 0),
+            r["code"],
+        ))
+    # 桶序号（前端分组展示用；未启用分桶时全为 1，等价于不分桶）
+    if use_bucket:
+        seq = {}
+        for r in cands:
+            b = r.get("dim_bucket", 9)
+            seq[b] = seq.get(b, 0) + 1
+            r["bucket_rank"] = seq[b]
+    else:
+        for r in cands:
+            r["bucket_rank"] = None
     for i, r in enumerate(cands, 1):
         r["rank"] = i
         # 状态文案：单周期沿用原文案；多周期叠加时逐周期罗列（单位各自标注）
+        # 同一只股票可能同时命中多个维度，按 ③ → ② → ① 的顺序罗列（信息量大的在前）。
         parts = []
         for p in r["periods"]:
             it = r["by_period"][p]
             lb, un = PERIODS[p]["label"], PERIODS[p]["unit"]
+            seg = []
+            if it.get("after_x"):
+                seg.append(f"已达成后{it['after_x']}{un}")
             if it.get("triggered"):
-                parts.append(f"{lb}已达成买入九转（第9个{un}）")
-            else:
-                parts.append(f"{lb}即将 · 还差{it.get('remain', 0)}{un}"
-                             f"（{it.get('cur_count', 0)}/9）")
+                seg.append(f"今日达成买入九转（第9个{un}）")
+            if it.get("hit_near"):
+                seg.append(f"即将 · 还差{it.get('remain', 0)}{un}"
+                           f"（{it.get('cur_count', 0)}/9）")
+            if not seg:      # 兜底：理论上不会出现（入选必有其一）
+                seg.append(f"即将 · 还差{it.get('remain', 0)}{un}")
+            parts.append(f"{lb}{' + '.join(seg)}")
         r["status"] = " ｜ ".join(parts)
 
     results = cands[:c["max_results"]]
@@ -931,6 +1110,9 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
             **(pstats.get("day") or (pstats[periods[0]] if periods else {})),
             "shrink_k": K,
             "by_period": pstats,
+            # 排序是否启用了「维度优先」分桶（多维度并集时才启用）
+            "use_dim_bucket": bool(use_bucket),
+            "dim_active": int(dim_active),
         },
         "params": {
             "periods": periods,
@@ -938,6 +1120,9 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
             "match_window": c["match_window"], "confirm_pct": c["confirm_pct"],
             "confirm_bars": c["confirm_bars"], "hist_years": c["hist_years"],
             "include_triggered": bool(c["include_triggered"]),
+            "after_days": list(c.get("after_days") or []),
+            "use_dim_bucket": bool(use_bucket),
+            "forced_near": bool(forced_near),
             "exclude_st": bool(c["exclude_st"]),
             "shrink_k": c["shrink_k"],
             "min_price": c["min_price"], "max_price": c["max_price"],
@@ -999,6 +1184,7 @@ def meta_info() -> dict:
         "doc": list(DOC_LINES),
         "main_len": MAIN_LEN,
         "recent_window": RECENT_WINDOW,
+        "after_days_allowed": list(AFTER_DAYS_ALLOWED),
         "periods": [
             {"key": p, "label": PERIODS[p]["label"], "unit": PERIODS[p]["unit"],
              "factor": PERIODS[p]["factor"], "hist_min": PERIODS[p]["min_hist"],

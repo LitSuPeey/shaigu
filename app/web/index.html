@@ -142,7 +142,18 @@
   <section class="panel active" id="tab-condition" data-page-node-id="ecjmaOPqu0dsxpO8xbYRvt">
     <div class="panel-head" data-page-node-id="O6uEGAxF9eaJDyFYHI5ne6">
       <h2 data-page-node-id="hbsugw71v0RVFQE6jelBg0">条件筛选</h2>
-      <p data-page-node-id="57T4vf1sJlaVWld1kspHdi">13 个形态 / 估值 / 股息 / 市场条件，勾选多个取交集。</p>
+      <p data-page-node-id="57T4vf1sJlaVWld1kspHdi">15 个形态 / 估值 / 股息 / 市场 / BOLL 条件，勾选多个取交集。</p>
+    </div>
+    <!-- 预设组合（一键套用条件 + 阈值，不挤占原布局，独立成条） -->
+    <div class="cond-presets" id="condPresets">
+      <div class="cp-head">
+        <span class="cp-title">🎯 预设组合</span>
+        <span class="cp-tip">点卡片一键套用该组合的条件与阈值 · 各组合互不影响</span>
+        <button class="btn btn-ghost btn-sm" id="btnCondReset" title="把所有条件与阈值恢复为出厂默认">↺ 恢复默认</button>
+      </div>
+      <div class="cp-grid" id="cpGrid"></div>
+      <div class="cp-slots" id="cpSlots"></div>
+      <div class="cp-msg" id="cpMsg"></div>
     </div>
     <div class="actions" style="margin-top:0" data-page-node-id="BHt8bImzudDSCnfxEmC5db">
       <button class="btn btn-ghost" id="btnCondAll" data-page-node-id="NEvNrDTtYMnUJ3b1TDxRvd">全选</button>
@@ -171,6 +182,22 @@
         <label>股息率下限(%) <input type="number" id="pDivYieldMin" value="3" min="0.5" max="15" step="0.5" /></label>
         <label>次新股排除(天) <input type="number" id="pNewStockDays" value="365" min="0" max="1000" /></label>
         <label class="adv-check"><input type="checkbox" id="pExcludeSt" checked /> 剔除 ST/退市</label>
+      </div>
+      <div class="adv-sub">📉 BOLL 布林带（⑭ 下轨支撑低吸）</div>
+      <div class="adv-grid">
+        <label>布林周期(日) <input type="number" id="pBollN" value="20" min="5" max="120" /></label>
+        <label>标准差倍数 k <input type="number" id="pBollK" value="2" min="1" max="4" step="0.1" /></label>
+        <label>触及下轨容差(%) <input type="number" id="pBollTouchTol" value="1" min="0" max="10" step="0.5" /></label>
+        <label>收回幅度/带宽 <input type="number" id="pBollReboundRatio" value="0.3" min="0" max="1" step="0.05" /></label>
+        <label>信号有效天数 <input type="number" id="pBollMaxTrendDays" value="3" min="1" max="30" /></label>
+      </div>
+      <div class="adv-sub">📈 BOLL 布林带（⑮ 中轨突破多头）</div>
+      <div class="adv-grid">
+        <label>突破量比下限 <input type="number" id="pBollBreakVol" value="1.2" min="0.5" max="5" step="0.1" /></label>
+        <label>带宽开口下限 <input type="number" id="pBollBreakWiden" value="0.95" min="0.5" max="3" step="0.05" /></label>
+        <label>刚突破观察天数 <input type="number" id="pBollBreakDays" value="5" min="1" max="30" /></label>
+        <label>首次突破回看(日) <input type="number" id="pBollBreakLookback" value="10" min="1" max="60" /></label>
+        <label class="adv-check"><input type="checkbox" id="pBollBreakMa60" checked /> 需站上60日均线</label>
       </div>
     </details>
     <div class="result-meme" id="condMeme" hidden data-page-node-id="BnphXyrCOyBFfSBBiFKCpr">
@@ -287,23 +314,36 @@
   <section class="panel" id="tab-r9">
     <div class="panel-head">
       <h2>9Reverse9 · 神奇九转</h2>
-      <p><b>程序一</b>：筛出<strong>即将到达买入九转</strong>的股票（还差几天可调）。
-        <b>程序二</b>：拉长历史找出全部买入 / 卖出九转信号，在信号 <strong>±5 个交易日</strong>内定位真正反转日 ——
+      <p><b>程序一</b>：筛出符合条件的股票，三个维度<strong>并存、可叠加</strong>：
+        <b>① 即将到达</b>（还差 ≤N 个周期）、<b>② 当天达成</b>（信号日当天，游程恰好到 9）、
+        <b>③ 已达成后 x 个周期</b>（x = 1 / 2 / 3，指信号日<strong>之后第 x 个</strong>周期，不含信号当天）。
+        <b>程序二</b>：拉长历史找出全部买入 / 卖出九转信号，在信号 <strong>±5 个周期</strong>内定位真正反转日 ——
         买入记 <b>n</b>（<i>9Rev n天后开始真正反弹</i>）、卖出记 <b>m</b>（<i>9Rev 提前m天开始下行</i>），
         负值表示拐点落在信号另一侧。</p>
       <p class="src-note">口径：收盘价连续 9 个<strong>周期</strong>低于 / 高于 4 个周期前 → 买入 / 卖出九转；反转须被<strong>拐点之后</strong>的行情确认，全程不含未来函数。
         <b>周期</b>可选 日线 / 周线 / 月线，三者各自独立成立（周线的「4 个周期前」= 4 周，月线 = 4 个月），
         勾选多个即<strong>叠加筛选</strong>：各周期<strong>先分别筛选、再整体并集</strong>（叠加是加分项，不是入选门槛），
         n / m 的单位随周期走（日 / 周 / 月），互不混算。
-        <b>排序分 = 按历史样本量收缩后的平均 n</b>（越小越靠前），避免「只出现过 1 次恰好见底」的股票霸榜；K 可调，设 0 即关闭收缩。
+        三个维度<strong>同样先分别判定、再取并集</strong>，x 的单位也随周期；⚠ ③ 只认<strong>恰好</strong>过了 x 个周期，已过 4 个而只选了 1/2/3 时<strong>不入选</strong>。
+        <b>排序</b>：同时勾选 ≥2 个维度时先按 <b>当天九转 &gt; 即将 &gt; 已过九转</b> 分档，档内再按「历史样本量收缩后的平均 n」升序
+        （越小越靠前），避免「只出现过 1 次恰好见底」的股票霸榜；K 可调，设 0 即关闭收缩。单维度时不分档，直接按平均 n 排。
         实测：多数卖出九转的<strong>真顶落在信号之后</strong>，更像「提前预警」而非见顶确认（比例见扫描汇总条）。</p>
     </div>
 
     <div class="controls">
-      <label>「即将」= 还差 ≤
-        <input type="number" id="r9Near" value="2" min="1" max="8" step="1" /> 个周期到达买入九转
+      <label title="设 0 = 关闭「即将」这一维度（只看「当天达成 / 已达成后 x」）">「即将」= 还差 ≤
+        <input type="number" id="r9Near" value="2" min="0" max="8" step="1" /> 个周期到达买入九转
       </label>
-      <label class="inline"><input type="checkbox" id="r9Triggered" /> 含「刚达成第 9 个周期」</label>
+      <label class="inline" title="游程恰好停在 9（信号当天）。开启后排序会按「当天 &gt; 即将 &gt; 已过」分档"><input type="checkbox" id="r9Triggered" /> 含「当天达成第 9 个」（当天九转）</label>
+      <label class="r9-after-label" title="已达成第 9 个之后，信号发出的第 x 个周期仍在延续。x=1 即信号后第 1 天（不含信号当天，当天请用左边的「当天达成」）。可多选，取并集；全不选 = 关闭该维度">
+        <span class="r9-after-cap">已达成后</span>
+        <span class="r9-afters" id="r9Afters">
+          <label class="r9-achip"><input type="checkbox" class="r9-after-cb" value="1" /> 1</label>
+          <label class="r9-achip"><input type="checkbox" class="r9-after-cb" value="2" /> 2</label>
+          <label class="r9-achip"><input type="checkbox" class="r9-after-cb" value="3" /> 3</label>
+        </span>
+        <span class="r9-after-unit">个周期</span>
+      </label>
       <label class="r9-periods-label" title="勾选多个 = 叠加筛选（并集）；各周期先分别筛选再合并，参数不跨周期复用">
         <span class="r9-periods-cap">周期（可叠加）</span>
         <span class="r9-periods" id="r9Periods">
@@ -449,9 +489,96 @@
   <section class="panel" id="tab-ant" data-page-node-id="9LMjEYNZBg2v1fmh9JF9s">
     <div class="panel-head" data-page-node-id="yKnDqRF49bC3x2AjuzGKQW">
       <h2 data-page-node-id="dZVqtc7e3vQFnqIHyqEdCr">蚂蚁呀欸</h2>
-      <p data-page-node-id="xx1QRlBr4Qkzz4DC6ahWNt">四层流水线：硬过滤 → 形态识别 → 综合打分 → 启动标记，专抓底部吸筹、均线粘合待启动的标的。
-        <b>分数区间（0-7）</b>：7 项得分按有效项数折算；≥5.5 优 · 4-5.4 良 · 2-3.5 观察。</p>
+      <p data-page-node-id="xx1QRlBr4Qkzz4DC6ahWNt">两种用法：<b>🧲 样本形态匹配</b> 以核心样本为中心，找当前走势相似的股票并分成
+        「周期刚刚启动 / 周期进行中」；<b>🏗 底部四层扫描</b> 是原版规则流水线（硬过滤 → 形态识别 → 综合打分 → 启动标记）。</p>
     </div>
+    <div class="sub-tabs" id="antSubTabs">
+      <button type="button" class="sub-tab active" data-sub="sim">🧲 样本形态匹配</button>
+      <button type="button" class="sub-tab" data-sub="scan">🏗 底部四层扫描</button>
+    </div>
+
+    <!-- ===== 样本形态匹配（v2：核心样本为中心 + 多时期样本加权） ===== -->
+    <div class="sub-panel" id="antSubSim">
+      <p class="sub-note">
+        以 <b>核心样本 000759.SZ（2026/06/04~08/13）</b> 为唯一中心，另以
+        <b>多元样本</b>（跨 2021 / 2022 / 2023 / 2025 / 2026 五个时期）和
+        <b>同期样本</b>（原样本，权重已削弱）加权参考，
+        在全市场找<b>当前走势与之相似</b>的股票，并按「周期走到样本的哪一步」分成
+        <b class="sim-pill sim-start">周期刚刚启动</b> / <b class="sim-pill sim-on">周期进行中</b>。
+      </p>
+      <p class="src-note">
+        <b>综合相似度</b> = Σ(组权重 × 组内最佳相似度) / Σ(组权重)（核心 1.00 · 多元 0.75 · 同期 0.60）；
+        单模板相似度 = 100 × (0.65×价形相关 + 0.20×幅度接近度 + 0.15×量形相关)，
+        比较对象是<b>重采样后 z-score 化的对数价格路径</b>，与价格高低、涨跌幅大小无关，只看形状。
+        门槛按<b>全市场横截面分位数</b>取（不是固定分数），严格程度越高保留越少。
+        <b>本模块按需求不做样本外/过拟合检验（允许过拟合）</b>，样本量小、生存者偏差明显，排名不代表未来收益。
+      </p>
+
+      <div class="strict-wrap" id="antStrictWrap" data-band="std">
+        <div class="strict-head">
+          <label for="antStrict">筛选严格程度</label>
+          <span class="strict-val" id="antStrictVal">100%</span>
+          <span class="strict-chip" id="antStrictChip">标准</span>
+          <span class="strict-hint" id="antStrictHint">默认档，兼顾数量与质量</span>
+        </div>
+        <!-- step 必须为 1：色带边界 81/101/151/181 若不在步进网格上，
+             range 会把它们吸附到 80/100/150/180 → 181-200 段几乎拖不到 -->
+        <input type="range" id="antStrict" min="50" max="200" step="1" value="100"
+               aria-label="筛选严格程度 50 到 200 百分比" />
+        <div class="strict-legend" id="antStrictLegend">
+          <span data-lo="50" data-hi="80">50–80%<b>宽松</b></span>
+          <span data-lo="81" data-hi="100">81–100%<b>标准</b></span>
+          <span data-lo="101" data-hi="150">101–150%<b>较严</b></span>
+          <span data-lo="151" data-hi="180">151–180%<b>严格</b></span>
+          <span data-lo="181" data-hi="200">181–200%<b>最严</b></span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <label>周期阶段
+          <select id="antsimStage">
+            <option value="">全部</option>
+            <option value="周期刚刚启动">只看周期刚刚启动</option>
+            <option value="周期进行中">只看周期进行中</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="btnRunAntsim">▶ 开始匹配</button>
+        <button class="btn btn-ghost" id="btnAntsimCsv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
+        <span class="hint" id="antsimHint"></span>
+      </div>
+
+      <div class="ant-samples">
+        <details id="antsimSamplesBox">
+          <summary>📋 样本库（3 组 · 点击展开核对）</summary>
+          <div id="antsimSamplesBody" class="as-body">加载中…</div>
+        </details>
+      </div>
+
+      <div class="result-meme" id="antsimMeme" hidden>
+        <img src="" alt="meme" />
+        <div class="result-meme-text">
+          <div class="meme-big"></div>
+          <div class="meme-sub"></div>
+        </div>
+      </div>
+
+      <div class="results">
+        <div class="antsim-sum" id="antsimSum" hidden></div>
+        <table class="result-table" id="antsimTable">
+          <thead></thead><tbody></tbody>
+        </table>
+      </div>
+    </div><!-- /#antSubSim -->
+
+    <!-- ===== 底部四层扫描（原版规则流水线） ===== -->
+    <div class="sub-panel" id="antSubScan" hidden>
+      <p class="sub-note">原版「四层流水线」：硬过滤 → 形态识别 → 综合打分 → 启动标记，
+        专抓底部吸筹、均线粘合待启动的标的。<b>分数区间（0-7）</b>：7 项得分按有效项数折算；
+        ≥5.5 优 · 4-5.4 良 · 2-3.5 观察。判据是<b>形状无关的绝对阈值</b>（振幅区间、回归 p 值等），
+        与上面的样本形态匹配是两套完全不同的口径，不要混看。</p>
     <div class="controls" data-page-node-id="hPgYL2VVaDC4atIl74shlE">
       <label data-page-node-id="vYWoGdy9N9uswMxeMMMcD7">最低总分
         <input type="number" id="antMinScore" value="4" min="0" max="7" step="0.5" data-page-node-id="1lYNlV5wwmfn80hGlaRpUX" />
@@ -500,6 +627,7 @@
         <thead data-page-node-id="MZ0bBDRMc5qiHkwu4mCH53"></thead><tbody data-page-node-id="qsIn8xY3J4HDu4LEEogWVq"></tbody>
       </table>
     </div>
+    </div><!-- /#antSubScan -->
 
     <!-- ===== 长周期版：持有个1000年试试呢？ ===== -->
     <div class="panel-sub" data-page-node-id="ant1000Sub">

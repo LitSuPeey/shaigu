@@ -14,8 +14,8 @@ from pydantic import BaseModel
 from ..core import db as core_db
 from ..core import ranges
 from ..core import sync as core_sync
-from ..modules import (alert, ant, ant1000, beton, bili, conditions, cycle, futures,
-                       pattern, reverse9, similar, snap, strategies, ticker)
+from ..modules import (alert, ant, ant1000, antsim, beton, bili, conditions, cycle,
+                       futures, pattern, reverse9, similar, snap, strategies, ticker)
 
 router = APIRouter()
 
@@ -470,6 +470,19 @@ def conditions_list():
     return out
 
 
+@router.get("/api/conditions/presets")
+def conditions_presets():
+    """预设组合（A/B）：返回条件 keys、推荐阈值 cfg、实测回测披露。"""
+    return {"presets": conditions.preset_list(),
+            "defaults": dict(conditions.DEFAULTS)}
+
+
+@router.get("/api/conditions/defaults")
+def conditions_defaults():
+    """默认阈值（前端「恢复默认」按钮的权威来源，避免前端硬编码漂移）。"""
+    return {"defaults": dict(conditions.DEFAULTS)}
+
+
 class ConditionReq(BaseModel):
     keys: list[str]
     cfg: dict = {}
@@ -664,6 +677,64 @@ def ant_run(req: AntReq):
         return _cancelled_response()
     finally:
         _task_done()
+
+
+# ============ 蚂蚁呀欸 · 样本形态匹配（v2，核心样本为中心） ============
+class AntsimReq(BaseModel):
+    cfg: dict = {}
+    strict: float = 100.0          # 严格程度 50~200（%）
+    exchange: Optional[str] = None
+    sectors: Optional[list[str]] = None
+
+
+@router.post("/api/antsim/run")
+def antsim_run(req: AntsimReq):
+    """样本形态匹配：走势与样本相似 + 周期刚刚启动 / 周期进行中 分类。"""
+    progress = {"frac": 0.0, "msg": "样本形态匹配启动"}
+    logs = []
+
+    def cb(done, total, msg):
+        progress["frac"] = done / max(total, 1)
+        progress["msg"] = msg
+        _task_progress(done, total, msg)
+
+    _task_start("蚂蚁样本形态匹配")
+    try:
+        out = antsim.run(req.cfg, _norm_exchange(req.exchange), req.sectors,
+                         strict=req.strict, progress_cb=cb, logs=logs)
+        out["logs"] = logs
+        out["progress"] = _clean(progress)
+        return _clean(out)
+    except TaskCancelled:
+        return _cancelled_response()
+    except Exception as e:  # noqa: BLE001 —— 数据/文件异常返回 JSON 错误而非 500
+        return {"error": f"样本形态匹配失败: {e}", "rows": [], "stats": {},
+                "templates": [], "notes": [str(e)[:300]]}
+    finally:
+        _task_done()
+
+
+@router.get("/api/antsim/samples")
+def antsim_samples():
+    """样本清单（三组：核心/多元/同期）与权重。"""
+    try:
+        return _clean(antsim.samples_info())
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e), "groups": []}
+
+
+class AntsimSamplesReq(BaseModel):
+    group: str
+    text: str = ""
+
+
+@router.post("/api/antsim/samples")
+def antsim_samples_save(req: AntsimSamplesReq):
+    """写回「多元」或「同期」样本文件（核心组为硬规则，只读）。"""
+    try:
+        return _clean(antsim.save_samples_text(req.group, req.text))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
 
 
 # ============ 持有个1000年试试呢？（长周期版蚂蚁） ============

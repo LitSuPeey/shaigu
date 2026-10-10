@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-"""13 个技术/估值/分红筛选条件 + 多条件并行交集组合。"""
+"""15 个技术/估值/分红筛选条件 + 多条件并行交集组合 + 预设组合。
+
+含 2 个 BOLL（布林带）买入条件：
+  ⑭ BOLL 下轨支撑低吸 —— 均值回归型，价格触及/跌破下轨后企稳
+  ⑮ BOLL 中轨突破多头 —— 趋势启动型，价格放量上穿中轨且带宽开口
+
+预设组合（PRESETS）：A 趋势启动 / B 超跌反弹，一键套用「条件 + 阈值」。
+"""
 import concurrent.futures
 import threading
 from datetime import date, datetime, timedelta
@@ -30,6 +37,24 @@ DEFAULTS = {
     "MIN_VAL_ROWS": 120,
     "DIV_YIELD_MIN": 3.0,
     "BAR_WINDOW": 300,
+    # ---- 股票池通用选项（非条件阈值，但一起下发便于前端「恢复默认」统一管理） ----
+    "EXCLUDE_ST": True,            # 剔除 ST/退市
+    "NEW_STOCK_DAYS": 365,         # 次新股排除天数
+    # ---- BOLL（布林带）参数 ----
+    # ⑭ BOLL 下轨支撑低吸
+    "BOLL_N": 20,                  # 布林中轨周期（MA20）
+    "BOLL_K": 2.0,                 # 上下轨标准差倍数
+    "BOLL_TOUCH_TOL": 1.0,         # 「触及下轨」容差(%)：最低价 ≤ 下轨×(1+tol/100)
+    "BOLL_REBOUND_RATIO": 0.30,    # 收回下轨上方幅度 ≥ 带宽×该比例（确认企稳，排除贴着下轨阴跌）
+    "BOLL_MAX_TREND_DAYS": 3,      # 信号须出现在最近 N 日内（贴近当下，避免追陈旧信号）
+    # ⑮ BOLL 中轨突破多头
+    "BOLL_BREAK_VOL": 1.20,        # 突破当日量比下限（成交量 / 前 N 日均量）
+    "BOLL_BREAK_WIDEN": 0.95,      # 带宽开口下限：突破日带宽 / N 日前带宽 ≥ 该值
+                                   #   （0.95 = 允许轻微收口，只排除明显缩口假突破；
+                                   #    底部横盘收口是常态，卡到 1.0 会误杀真突破）
+    "BOLL_BREAK_DAYS": 5,          # 「刚突破」观察天数：须在最近 N 日内首次上穿中轨
+    "BOLL_BREAK_MA60": 1.0,        # 1=要求收盘同时站上 60 日均线（趋势过滤），0=不要求
+    "BOLL_BREAK_LOOKBACK": 10,     # 判定「近期是否曾站上中轨」的回看天数
 }
 
 
@@ -77,7 +102,7 @@ def _linreg_slope_r2(y):
 
 
 # ============================================================================
-# 13 条件（ctx = {"bars","val","div","meta"}）
+# 15 条件（ctx = {"bars","val","div","meta","snap"}）
 # ============================================================================
 def cond_rising_channel(ctx, cfg):
     """① 上升通道：近 N 日收盘价线性回归斜率>0 且 R²≥阈值。"""
@@ -216,6 +241,117 @@ def cond_low_golden_cross(ctx, cfg):
     return bool(d1 < e1 and d0 >= e0 and d0 < 0 and e0 < 0)
 
 
+def _boll(close, n, k):
+    """布林带：中轨 = MA(n)，上/下轨 = 中轨 ± k×总体标准差(n)。"""
+    mid = close.rolling(n).mean()
+    std = close.rolling(n).std(ddof=0)
+    return mid, mid + k * std, mid - k * std
+
+
+def cond_boll_lower_support(ctx, cfg):
+    """⑭ BOLL 下轨支撑低吸（均值回归型买入）。
+
+    判据（近 BOLL_MAX_TREND_DAYS 日内出现信号即命中）：
+      ① 最低价触及/跌破下轨（容差 BOLL_TOUCH_TOL%）；
+      ② 当日收盘重新收回下轨上方，且收回幅度 ≥ 带宽×BOLL_REBOUND_RATIO（确认企稳而非贴着下轨阴跌）；
+      ③ 当日收盘仍在**中轨之下**（保证是低位低吸，而非已经从下轨反弹到中轨上方）。
+    信号日为「最近一次满足上述三条的交易日」，须落在最近 N 日窗口内。
+    """
+    bars = ctx["bars"]
+    n = int(cfg["BOLL_N"])
+    k = float(cfg["BOLL_K"])
+    win = int(cfg["BOLL_MAX_TREND_DAYS"])
+    if bars is None or bars.empty or len(bars) < n + 2:
+        return False
+    close = bars["close"].astype(float)
+    low = bars["low"].astype(float)
+    mid, up, lo = _boll(close, n, k)
+    tol = float(cfg["BOLL_TOUCH_TOL"]) / 100.0
+    rb = float(cfg["BOLL_REBOUND_RATIO"])
+    start = max(n, len(bars) - win)          # 只看最近 win 日
+    for i in range(start, len(bars)):
+        m, l, c, lo_w = mid.iloc[i], lo.iloc[i], close.iloc[i], low.iloc[i]
+        if pd.isna(m) or pd.isna(l):
+            continue
+        width = float(m) - float(l)
+        if width <= 0:
+            continue
+        if float(lo_w) > float(l) * (1.0 + tol):      # ① 未触及下轨
+            continue
+        if float(c) <= float(l):                       # ② 收盘仍在下轨之下
+            continue
+        if float(c) - float(l) < width * rb:           # ② 收回幅度不足
+            continue
+        if float(c) >= float(m):                       # ③ 已回到中轨上方 → 不是低吸位
+            continue
+        return True
+    return False
+
+
+def cond_boll_break_mid(ctx, cfg):
+    """⑮ BOLL 中轨突破多头（趋势启动型买入）。
+
+    判据：
+      ① 最近 BOLL_BREAK_DAYS 日内出现「收盘上穿中轨」的突破日（前一日≤中轨，当日>中轨）；
+      ② 突破日成交量 ≥ 前 n 日均量 × BOLL_BREAK_VOL（放量确认）；
+      ③ 突破日带宽 / n 日前带宽 ≥ BOLL_BREAK_WIDEN（开口放大，排除缩口假突破）；
+      ④ 突破日收盘必须高于前一日中轨（突破有效），且此前 BOLL_BREAK_LOOKBACK 日内未站上中轨（首次突破）；
+      ⑤ 若 BOLL_BREAK_MA60=1，突破日收盘同时站上 60 日均线。
+    """
+    bars = ctx["bars"]
+    n = int(cfg["BOLL_N"])
+    k = float(cfg["BOLL_K"])
+    days = int(cfg["BOLL_BREAK_DAYS"])
+    if bars is None or bars.empty or len(bars) < n + 60:
+        return False
+    close = bars["close"].astype(float)
+    vol = bars["volume"].astype(float)
+    mid, up, lo = _boll(close, n, k)
+    ma60 = close.rolling(60).mean()
+    vol_min = float(cfg["BOLL_BREAK_VOL"])
+    widen_min = float(cfg["BOLL_BREAK_WIDEN"])
+    lookback = int(cfg["BOLL_BREAK_LOOKBACK"])
+    need_ma60 = float(cfg.get("BOLL_BREAK_MA60", 1.0)) >= 0.5
+    start = max(n + 1, len(bars) - days)
+    for i in range(start, len(bars)):
+        m0, m1 = mid.iloc[i - 1], mid.iloc[i]
+        c0, c1 = close.iloc[i - 1], close.iloc[i]
+        if any(pd.isna(x) for x in (m0, m1, c0, c1, lo.iloc[i])):
+            continue
+        cross = float(c0) <= float(m0) and float(c1) > float(m1)
+        if not cross:                                  # ① 非上穿日
+            continue
+        # ② 放量
+        j0 = max(0, i - n)
+        vol_ma = float(vol.iloc[j0:i].mean()) if i > j0 else np.nan
+        if not np.isfinite(vol_ma) or vol_ma <= 0:
+            continue
+        if float(vol.iloc[i]) < vol_ma * vol_min:
+            continue
+        # ③ 带宽开口
+        w1 = float(m1) - float(lo.iloc[i])
+        wi = i - n
+        w0 = (float(mid.iloc[wi]) - float(lo.iloc[wi])) if wi >= 0 else np.nan
+        if not np.isfinite(w0) or w0 <= 0:
+            continue
+        if w1 / w0 < widen_min:
+            continue
+        # ④ 首次突破：突破日之前 lookback 日内从未收盘站上中轨
+        s = max(n, i - lookback - 1)
+        prev_above = False
+        for j in range(s, i - 1):
+            if pd.notna(mid.iloc[j]) and float(close.iloc[j]) > float(mid.iloc[j]):
+                prev_above = True
+                break
+        if prev_above:
+            continue
+        # ⑤ 60 日线过滤
+        if need_ma60 and (pd.isna(ma60.iloc[i]) or float(c1) <= float(ma60.iloc[i])):
+            continue
+        return True
+    return False
+
+
 def cond_pe_low(ctx, cfg):
     """⑧ PE低估（走快照表，秒级）。"""
     snap = ctx.get("snap")
@@ -307,6 +443,14 @@ CONDITIONS = {
     "exchange_bj":      {"label": "⑬ 北证",
                          "desc": "北交所股票（代码以8/4/92开头）",
                          "fn": cond_exchange_bj},
+    "boll_lower_support": {"label": "⑭ BOLL下轨支撑低吸",
+                           "desc": "近3日触及/跌破布林下轨(20,2)后收盘收回下轨上方"
+                                   "（收回幅度≥带宽30%）且仍在中轨之下",
+                           "fn": cond_boll_lower_support},
+    "boll_break_mid":   {"label": "⑮ BOLL中轨突破多头",
+                         "desc": "近5日首次放量上穿布林中轨(20,2)，带宽开口扩大"
+                                 "且收盘站上60日均线",
+                         "fn": cond_boll_break_mid},
 }
 
 # 每个条件依赖的上下文字段（按需加载，跳过无关查询，大幅提速）
@@ -324,6 +468,8 @@ _COND_NEEDS = {
     "exchange_sz":      {"meta"},
     "exchange_sh":      {"meta"},
     "exchange_bj":      {"meta"},
+    "boll_lower_support": {"bars"},
+    "boll_break_mid":   {"bars"},
 }
 _ALL_FIELDS = {"bars", "val", "div", "meta", "snap"}
 
@@ -502,4 +648,77 @@ def run(condition_keys: list[str], cfg: dict,
     if not out.empty:
         out = out.sort_values("PE-TTM", ascending=True,
                               na_position="last").reset_index(drop=True)
+    return out
+
+
+# ============================================================================
+# 预设组合（一键套用「条件 + 阈值」）
+# ============================================================================
+# 设计说明
+# --------
+# 两个组合对应两种截然不同的买入风格，且**只使用本模块已有的条件与阈值键**，
+# 不引入任何新参数，保证「一键套用」后前端控件与后端 cfg 完全对得上。
+#
+# A 趋势启动型：顺中期趋势，等突破确认后介入（右侧交易，持有期偏长）
+# B 超跌反弹型：左侧低吸，等跌到估值/支撑极端位置再进（均值回归）
+#
+# 阈值取值依据（scripts/_boll_bt.py / _boll_tune*.py 事件研究回测）：
+#   - 下轨低吸在 T+120 的胜率约 47~51%，均收益 +6.4%~+9.7%（跑赢基准 2~3pp）
+#   - 中轨突破在 T+120 的胜率约 44~47%，均收益 +6.4%~+9.5%
+#   两者**均未稳定超过 50% 胜率**，故组合只做「筛选漏斗」定位，
+#   前端会明确披露实测胜率，不假装是「高胜率策略」。
+#
+# ★条件数量经实测标定：全市场跑一遍，条件交集过深会直接归零。
+#   boll_break_mid 单独 31 只；× low_golden_cross(120) = 4 只；× three_lines_bloom(477) = 3 只；
+#   boll_break_mid × pullback_support(1657) = 23 只 ← 用这个，既够严又能出票。
+#   boll_lower_support 单独 951 只；× w_bottom = 49 只 ← 双底部形态互相确认，出票充足。
+PRESETS = [
+    {
+        "key": "A",
+        "name": "组合 A · 趋势启动",
+        "style": "趋势跟随 · 右侧",
+        "desc": "布林放量突破中轨 + 回踩 20 日线确认支撑，等突破回踩后再顺势介入，适合能拿住的中线。",
+        "keys": ["boll_break_mid", "pullback_support"],
+        "cfg": {
+            "BOLL_N": 20, "BOLL_K": 2.0,
+            "BOLL_BREAK_VOL": 1.30,      # 比默认 1.20 更严：要更明确的放量确认
+            "BOLL_BREAK_WIDEN": 1.00,    # 要开口扩张，排除收口假突破
+            "BOLL_BREAK_DAYS": 5,
+            "BOLL_BREAK_LOOKBACK": 10,
+            "BOLL_BREAK_MA60": 1,
+            "PULLBACK_DAYS": 20, "SUPPORT_MA": 20, "PULLBACK_TOL": 2.0,
+            "EXCLUDE_ST": True, "NEW_STOCK_DAYS": 365,
+        },
+        "backtest": {"horizon": 120, "win": 47.2, "ret": 9.54,
+                     "note": "中轨突破 · T+120 实测（含强牛市场过滤）"},
+    },
+    {
+        "key": "B",
+        "name": "组合 B · 超跌反弹",
+        "style": "均值回归 · 左侧",
+        "desc": "布林下轨低吸 + W 底突破颈线，两个底部信号互相印证，适合左侧分批埋伏、耐心持有。",
+        "keys": ["boll_lower_support", "w_bottom"],
+        "cfg": {
+            "BOLL_N": 20, "BOLL_K": 2.0,
+            "BOLL_TOUCH_TOL": 1.5,       # 比默认 1.0 略宽：低吸不必苛求精确触轨
+            "BOLL_REBOUND_RATIO": 0.35,  # 比默认 0.30 更严：要更实的收回（排除贴轨阴跌）
+            "BOLL_MAX_TREND_DAYS": 3,
+            "W_BOTTOM_DAYS": 60, "W_BOTTOM_TOL": 3.0,
+            "EXCLUDE_ST": True, "NEW_STOCK_DAYS": 365,
+        },
+        "backtest": {"horizon": 120, "win": 50.7, "ret": 9.69,
+                     "note": "下轨低吸 · T+120 实测（含强牛市场过滤）"},
+    },
+]
+
+
+def preset_list() -> list[dict]:
+    """预设组合清单（供 API 返回；cfg 为纯增量，前端与 DEFAULTS 合并后使用）。"""
+    out = []
+    for p in PRESETS:
+        out.append({
+            "key": p["key"], "name": p["name"], "style": p["style"],
+            "desc": p["desc"], "keys": list(p["keys"]),
+            "cfg": dict(p["cfg"]), "backtest": dict(p["backtest"]),
+        })
     return out

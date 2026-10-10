@@ -80,6 +80,7 @@ const API = {
   strategiesList: () => fetchJSON('/api/strategies/list', {}, 15000),
   strategiesRun: body => fetchJSON('/api/strategies/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 600000, true),
   conditionsList: () => fetchJSON('/api/conditions/list', {}, 15000),
+  conditionsPresets: () => fetchJSON('/api/conditions/presets', {}, 15000),
   conditionsRun: body => fetchJSON('/api/conditions/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 600000, true),
   patternRun: body => fetchJSON('/api/pattern/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 600000, true),
   snapRun: body => fetchJSON('/api/snap/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 600000, true),
@@ -92,6 +93,9 @@ const API = {
   ant1000Run: body => fetchJSON('/api/ant1000/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 3600000, true),
   ant1000Cache: () => fetchJSON('/api/ant1000/cache', {}, 30000),
   ant1000Kline: (code, years) => fetchJSON(`/api/ant1000/kline?code=${encodeURIComponent(code)}&years=${years || 20}`, {}, 60000),
+  antsimRun: body => fetchJSON('/api/antsim/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 600000, true),
+  antsimSamples: () => fetchJSON('/api/antsim/samples', {}, 30000),
+  antsimSamplesSave: body => fetchJSON('/api/antsim/samples', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 30000),
   similarRun: body => fetchJSON('/api/similar/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 600000, true),
   alertRun: body => fetchJSON('/api/alert/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 600000, true),
   alertReport: body => fetchJSON('/api/alert/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, 60000),
@@ -201,18 +205,20 @@ function renderTable(tableId, rows, opts = {}) {
     const v = r[c];
     if (c === '代码' || c === 'code') {
       // 代码：站内切换到 K 线查看（快速查看）
-      return `<td><a href="#" class="stock-link code-link" data-code="${v}" title="快速查看 · 站内看K线">${v}</a></td>`;
+      return `<td><a href="#" class="stock-link code-link" data-code="${escHtml(v)}" title="快速查看 · 站内看K线">${escHtml(v)}</a></td>`;
     }
     if (c === '名称' || c === 'name') {
       const code = r['代码'] || r['code'] || '';
       // 名称：新标签页打开同花顺（详细查询）
-      return `<td><a href="${thsLink(code)}" target="_blank" rel="noopener noreferrer" class="stock-link name-link" data-code="${code}" title="详细查询 · 同花顺新窗口">${v ?? ''}</a></td>`;
+      // 注意：名称来自行情库，必须转义后再拼 HTML（此前是 ${v ?? ''} 直接内插，
+      // 一旦上游出现带 <>&" 的名称就会破坏结构/形成注入面）。
+      return `<td><a href="${thsLink(code)}" target="_blank" rel="noopener noreferrer" class="stock-link name-link" data-code="${escHtml(code)}" title="详细查询 · 同花顺新窗口">${escHtml(v ?? '')}</a></td>`;
     }
     if (c === '简称') {
       // 简称（预警国家队等表格）：同样跳同花顺（详细查询）
       const code = r['代码'] || r['code'] || '';
-      if (!code) return `<td>${v ?? ''}</td>`;
-      return `<td><a href="${thsLink(code)}" target="_blank" rel="noopener noreferrer" class="stock-link name-link" title="详细查询 · 同花顺新窗口">${v ?? ''}</a></td>`;
+      if (!code) return `<td>${escHtml(v ?? '')}</td>`;
+      return `<td><a href="${thsLink(code)}" target="_blank" rel="noopener noreferrer" class="stock-link name-link" title="详细查询 · 同花顺新窗口">${escHtml(v ?? '')}</a></td>`;
     }
     if (typeof v === 'number') {
       const isPct = PCT_RE.test(c);
@@ -482,6 +488,280 @@ async function runStrategies() {
 }
 
 // ========= 条件 =========
+// 阈值输入框 ↔ cfg 键 的映射表（单一事实来源，供「读 cfg / 写 cfg / 恢复默认」三处共用）
+const COND_FIELDS = [
+  ['#pChannelDays', 'CHANNEL_DAYS'], ['#pChannelR2', 'CHANNEL_R2'],
+  ['#pPullbackDays', 'PULLBACK_DAYS'], ['#pSupportMa', 'SUPPORT_MA'],
+  ['#pPullbackTol', 'PULLBACK_TOL'], ['#pSmallYangDays', 'SMALL_YANG_DAYS'],
+  ['#pSmallYangMax', 'SMALL_YANG_MAX'], ['#pWBottomDays', 'W_BOTTOM_DAYS'],
+  ['#pWBottomTol', 'W_BOTTOM_TOL'], ['#pDivergenceDays', 'DIVERGENCE_DAYS'],
+  ['#pRsiDays', 'RSI_DAYS'], ['#pValYears', 'VAL_YEARS'],
+  ['#pPePercentile', 'PE_PERCENTILE'], ['#pPbPercentile', 'PB_PERCENTILE'],
+  ['#pMinValRows', 'MIN_VAL_ROWS'], ['#pDivYieldMin', 'DIV_YIELD_MIN'],
+  ['#pNewStockDays', 'NEW_STOCK_DAYS'],
+  ['#pBollN', 'BOLL_N'], ['#pBollK', 'BOLL_K'],
+  ['#pBollTouchTol', 'BOLL_TOUCH_TOL'], ['#pBollReboundRatio', 'BOLL_REBOUND_RATIO'],
+  ['#pBollMaxTrendDays', 'BOLL_MAX_TREND_DAYS'],
+  ['#pBollBreakVol', 'BOLL_BREAK_VOL'], ['#pBollBreakWiden', 'BOLL_BREAK_WIDEN'],
+  ['#pBollBreakDays', 'BOLL_BREAK_DAYS'], ['#pBollBreakLookback', 'BOLL_BREAK_LOOKBACK'],
+];
+// 复选框型阈值
+// 注意：MA60 这类「数值型开关」后端按 float 比较（>=0.5 才生效），
+// 历史上一直传 0/1；这里显式转成 0/1，不要把 boolean 泄漏给后端。
+const COND_CHECKS = [
+  ['#pExcludeSt', 'EXCLUDE_ST', 'bool'],
+  ['#pBollBreakMa60', 'BOLL_BREAK_MA60', 'num01'],
+];
+
+// 「恢复默认」用的出厂默认值：以 index.html 里的 value/checked 属性为准（首次调用时只读一次）
+// 注意：绝不能拿「当前输入框运行时值」当默认，否则会被预设组合污染。
+// getAttribute 优先；若 HTML 没写 value 属性（罕见）再退回运行时值兜底，避免整键缺失。
+let _condFactory = null;
+function captureCondFactory() {
+  if (_condFactory) return _condFactory;
+  const nums = {};
+  COND_FIELDS.forEach(([sel, key]) => {
+    const el = $(sel);
+    if (!el) { nums[key] = NaN; return; }
+    const attr = el.getAttribute('value');
+    const v = parseFloat(attr != null ? attr : el.value);
+    nums[key] = Number.isFinite(v) ? v : NaN;
+  });
+  const checks = {};
+  COND_CHECKS.forEach(([sel, key]) => {
+    const el = $(sel);
+    // HTML 里写了 checked 属性 → 出厂即勾选；元素缺失按「勾选」保守处理
+    if (!el) { checks[key] = true; return; }
+    // 兼容性：有的桩/旧环境没有 hasAttribute，回退到 getAttribute
+    checks[key] = typeof el.hasAttribute === 'function'
+      ? el.hasAttribute('checked') : el.getAttribute('checked') != null;
+  });
+  _condFactory = { nums, checks };
+  return _condFactory;
+}
+
+// 读当前 cfg（runConditions 与「保存自定义」共用）
+// 空输入 → 回退出厂默认（而不是把键丢掉）：保证提交的 cfg 始终完整，
+// 用户清空某个框时看到的行为与「恢复默认」一致，不用猜后端会补什么。
+function readCondCfg() {
+  const cfg = {};
+  const fac = captureCondFactory();
+  COND_FIELDS.forEach(([sel, key]) => {
+    const el = $(sel);
+    const v = el ? parseFloat(el.value) : NaN;
+    cfg[key] = Number.isFinite(v) ? v : fac.nums[key];
+  });
+  COND_CHECKS.forEach(([sel, key, kind]) => {
+    const el = $(sel);
+    if (!el) return;
+    cfg[key] = kind === 'num01' ? (el.checked ? 1 : 0) : el.checked;
+  });
+  return cfg;
+}
+
+// 写 cfg 到控件（只写 cfg 里出现的键 → 天然满足「不影响其它组合」）
+function applyCondCfg(cfg) {
+  if (!cfg) return;
+  COND_FIELDS.forEach(([sel, key]) => {
+    if (!(key in cfg)) return;
+    const el = $(sel);
+    if (el) el.value = String(cfg[key]);
+  });
+  COND_CHECKS.forEach(([sel, key]) => {
+    if (!(key in cfg)) return;
+    const el = $(sel);
+    if (el) el.checked = !!cfg[key];
+  });
+}
+
+// 勾选条件（全量覆盖：先清后勾，确保一键套用是「替换」而非「叠加」）
+function checkCondKeys(keys) {
+  const want = new Set(keys || []);
+  $$('#condGrid input').forEach(cb => {
+    cb.checked = want.has(cb.value);
+    cb.closest('.cond-item').classList.toggle('active', cb.checked);
+  });
+}
+
+// 按当前勾选 + 阈值执行筛选（预设卡片点「套用并筛选」时复用）
+async function runConditions() {
+  hideMeme('condMeme');
+  const keys = $$('#condGrid input:checked').map(c => c.value);
+  if (keys.length === 0) { showMeme('condMeme', 'ask', '请先勾选条件', '至少选一个条件哦'); return; }
+  showOverlay('loading', `正在按条件过滤…（${estText('cond', rangeVal())}）`, { cancellable: true });
+  try {
+    const cfg = readCondCfg();
+    const data = await API.conditionsRun({ keys, exchange: rangeVal(), cfg });
+    hideOverlay();
+    const rows = data.rows || [];
+    if (rows.length === 0) {
+      showMeme('condMeme', 'empty', '没有交集', '条件太严了，放宽一点试试');
+      renderTable('condTable', []);
+      return;
+    }
+    showMeme('condMeme', 'success', `${keys.length} 条件命中 ${rows.length} 只 ✨`, '按 PE-TTM 升序展示');
+    renderTable('condTable', rows, { max: 300 });
+  } catch (e) {
+    hideOverlay();
+    if (_userCancelled) { showMeme('condMeme', 'farewell', '已取消这次筛选', '随时可以重新开始'); return; }
+    showMeme('condMeme', 'error', '请求失败', String(e));
+  }
+}
+
+// ---------- 预设组合 ----------
+const CP_LS_KEY = 'condCustomPresets';   // 自定义组合本地存档
+const CP_MAX_CUSTOM = 2;                 // 最多自定义两个
+let _cpPresets = [];                     // 后端下发的 A/B
+let _cpActive = null;                    // 当前套用的组合 key（'A'/'B'/'c0'/'c1'）
+let _cpMsgTimer = null;
+
+function cpMsg(html) {
+  const el = $('#cpMsg');
+  if (!el) return;
+  el.innerHTML = html;
+  if (_cpMsgTimer) clearTimeout(_cpMsgTimer);
+  _cpMsgTimer = setTimeout(() => { el.innerHTML = ''; }, 8000);
+}
+
+function cpLoadCustom() {
+  try {
+    const raw = localStorage.getItem(CP_LS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter(p => p && p.name && Array.isArray(p.keys)) : [];
+  } catch (e) { return []; }
+}
+function cpSaveCustom(arr) {
+  try { localStorage.setItem(CP_LS_KEY, JSON.stringify(arr)); } catch (e) { /* 隐私模式忽略 */ }
+}
+
+// 条件 key → 短标签（去掉 ①②③ 前缀，便于卡片上紧凑展示）
+function cpKeyChips(keys) {
+  return (keys || []).map(k => {
+    const item = $$('#condGrid .cond-item').find(it => it.querySelector('input').value === k);
+    let label = k;
+    if (item) {
+      const nm = item.querySelector('.ci-name');
+      label = (nm ? nm.textContent : k).replace(/^[①-⑳]\s*/, '');
+    }
+    return `<span class="cp-keychip">${escHtml(label)}</span>`;
+  }).join('');
+}
+
+function cpRenderCard(p, idx) {
+  const isCustom = p.custom === true;
+  const bt = p.backtest || {};
+  const btLine = bt.horizon
+    ? `实测 T+${bt.horizon} 胜率 ${bt.win}% · 均收益 ${bt.ret > 0 ? '+' : ''}${bt.ret}%<br>${escHtml(bt.note || '')}`
+    : '';
+  const del = isCustom
+    ? `<button class="cp-del" data-del="${idx}" title="删除该自定义组合">×</button>` : '';
+  const badge = _cpActive === p.key ? '<span class="cp-badge">已套用</span>' : '';
+  return `<div class="cp-card${_cpActive === p.key ? ' active' : ''}" data-cpkey="${escHtml(p.key)}">
+    ${badge}${del}
+    <div><span class="cp-name">${escHtml(p.name)}</span>${p.style ? `<span class="cp-style">${escHtml(p.style)}</span>` : ''}</div>
+    <div class="cp-desc">${escHtml(p.desc || '')}</div>
+    <div class="cp-keys">${cpKeyChips(p.keys)}</div>
+    ${btLine ? `<div class="cp-bt">${btLine}</div>` : ''}
+  </div>`;
+}
+
+function cpRender() {
+  const custom = cpLoadCustom();
+  const grid = $('#cpGrid');
+  if (grid) grid.innerHTML = _cpPresets.map(p => cpRenderCard(p, -1)).join('');
+
+  // 自定义槽位：已存的渲染成卡片，剩余的显示「新建」按钮
+  const slots = $('#cpSlots');
+  if (slots) {
+    const cards = custom.map((p, i) => cpRenderCard(
+      { ...p, key: 'c' + i, custom: true }, i)).join('');
+    const canAdd = custom.length < CP_MAX_CUSTOM;
+    const label = custom.length === 0 ? '＋ 新建自定义组合'
+      : (canAdd ? '＋ 再存一个自定义组合' : `已达上限（${CP_MAX_CUSTOM} 个）`);
+    slots.innerHTML = cards
+      + `<button class="cp-slot-btn" id="btnCpSave" ${canAdd ? '' : 'disabled'}>${label}</button>`;
+  }
+  // 事件绑定
+  $$('#cpGrid .cp-card, #cpSlots .cp-card').forEach(card => {
+    card.addEventListener('click', e => {
+      if (e.target.closest('.cp-del')) return;   // 删除按钮单独处理
+      cpApply(card.dataset.cpkey);
+    });
+  });
+  $$('#cpSlots .cp-del').forEach(b => {
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      const i = parseInt(b.dataset.del, 10);
+      const arr = cpLoadCustom();
+      if (i >= 0 && i < arr.length) {
+        const nm = arr[i].name;
+        if (!confirm(`删除自定义组合「${nm}」？该操作只删组合存档，不改动当前条件与阈值。`)) return;
+        arr.splice(i, 1);
+        cpSaveCustom(arr);
+        if (_cpActive === 'c' + i) _cpActive = null;
+        cpRender();
+        cpMsg(`已删除自定义组合「<b>${escHtml(nm)}</b>」。`);
+      }
+    });
+  });
+  const saveBtn = $('#btnCpSave');
+  if (saveBtn) saveBtn.addEventListener('click', cpSaveCurrent);
+}
+
+// 一键套用：条件 = 替换、阈值 = 与出厂默认合并后写入 → 不碰其它组合的任何值
+function cpApply(key) {
+  const all = [..._cpPresets, ...cpLoadCustom().map((p, i) => ({ ...p, key: 'c' + i, custom: true }))];
+  const p = all.find(x => x.key === key);
+  if (!p) return;
+  const factory = captureCondFactory();
+  // 先回到出厂阈值，再叠加该组合的增量（避免上一组合的残留值泄漏进来）
+  applyCondCfg(factory.nums);
+  applyCondCfg(factory.checks);
+  applyCondCfg(p.cfg || {});
+  checkCondKeys(p.keys);
+  _cpActive = key;
+  cpRender();
+  const bt = p.backtest || {};
+  const btTxt = bt.horizon
+    ? `（实测 T+${bt.horizon} 胜率 <b>${bt.win}%</b> · 均收益 <b>+${bt.ret}%</b>）` : '';
+  cpMsg(`已套用「<b>${escHtml(p.name)}</b>」：勾选 ${p.keys.length} 个条件、写入 ${Object.keys(p.cfg || {}).length} 项阈值。`
+    + `点 <b>▶ 按条件筛选</b> 即可运行。${btTxt}`);
+}
+
+// 保存当前状态为自定义组合（最多 2 个）
+function cpSaveCurrent() {
+  const keys = $$('#condGrid input:checked').map(c => c.value);
+  if (keys.length === 0) { cpMsg('当前没有勾选任何条件，无法保存。请先勾选条件。'); return; }
+  const arr = cpLoadCustom();
+  if (arr.length >= CP_MAX_CUSTOM) { cpMsg(`最多只能保存 ${CP_MAX_CUSTOM} 个自定义组合。`); return; }
+  const dft = `自定义${arr.length + 1}`;
+  const name = (prompt(`给这个自定义组合起个名字（最多 ${CP_MAX_CUSTOM} 个）：`, dft) || '').trim();
+  if (!name) return;
+  arr.push({ name, keys, cfg: readCondCfg(), desc: `自定义 · ${keys.length} 个条件`, style: '自定义' });
+  cpSaveCustom(arr);
+  _cpActive = 'c' + (arr.length - 1);
+  cpRender();
+  cpMsg(`已保存自定义组合「<b>${escHtml(name)}</b>」（${arr.length}/${CP_MAX_CUSTOM}）。它只记录当前条件与阈值，不影响 A/B 预设。`);
+}
+
+// 恢复默认：仅把条件与阈值调回出厂值，删除的只是「当前选择」，不动任何组合存档
+function cpReset() {
+  if (!confirm('确定把所有条件与阈值「恢复默认」吗？\n\n· 会取消全部条件勾选（回到默认勾选前 4 个）\n· 会把 26 项阈值调回出厂值\n· 不会影响已保存的预设/自定义组合')) return;
+  const factory = captureCondFactory();
+  applyCondCfg(factory.nums);
+  applyCondCfg(factory.checks);
+  // 默认勾选前 4 个条件（与 initConditions 初始行为一致）
+  const items = $$('#condGrid .cond-item');
+  items.forEach((item, i) => {
+    const cb = item.querySelector('input');
+    cb.checked = i < 4;
+    item.classList.toggle('active', cb.checked);
+  });
+  _cpActive = null;
+  cpRender();
+  cpMsg('已恢复默认条件与阈值。<b>组合存档未受影响</b>，可随时再次点击预设卡片套用。');
+}
+
 async function initConditions() {
   const list = await API.conditionsList();
   $('#condGrid').innerHTML = list.map(c => `
@@ -503,39 +783,16 @@ async function initConditions() {
     const cb = item.querySelector('input');
     cb.checked = true; item.classList.add('active');
   });
-}
-async function runConditions() {
-  hideMeme('condMeme');
-  const keys = $$('#condGrid input:checked').map(c => c.value);
-  if (keys.length === 0) { showMeme('condMeme', 'ask', '请先勾选条件', '至少选一个条件哦'); return; }
-  showOverlay('loading', `正在按条件过滤…（${estText('cond', rangeVal())}）`, { cancellable: true });
+  // 预设组合（后端失败不影响条件筛选主流程）
   try {
-    const cfg = {
-      CHANNEL_DAYS: num('#pChannelDays', 60), CHANNEL_R2: num('#pChannelR2', 0.6),
-      PULLBACK_DAYS: num('#pPullbackDays', 20), SUPPORT_MA: num('#pSupportMa', 20),
-      PULLBACK_TOL: num('#pPullbackTol', 2), SMALL_YANG_DAYS: num('#pSmallYangDays', 5),
-      SMALL_YANG_MAX: num('#pSmallYangMax', 3), W_BOTTOM_DAYS: num('#pWBottomDays', 60),
-      W_BOTTOM_TOL: num('#pWBottomTol', 3), DIVERGENCE_DAYS: num('#pDivergenceDays', 60),
-      RSI_DAYS: num('#pRsiDays', 14), VAL_YEARS: num('#pValYears', 10),
-      PE_PERCENTILE: num('#pPePercentile', 10), PB_PERCENTILE: num('#pPbPercentile', 10),
-      MIN_VAL_ROWS: num('#pMinValRows', 120), DIV_YIELD_MIN: num('#pDivYieldMin', 3),
-      NEW_STOCK_DAYS: num('#pNewStockDays', 365), EXCLUDE_ST: $('#pExcludeSt').checked,
-    };
-    const data = await API.conditionsRun({ keys, exchange: rangeVal(), cfg });
-    hideOverlay();
-    const rows = data.rows || [];
-    if (rows.length === 0) {
-      showMeme('condMeme', 'empty', '没有交集', '条件太严了，放宽一点试试');
-      renderTable('condTable', []);
-      return;
-    }
-    showMeme('condMeme', 'success', `${keys.length} 条件命中 ${rows.length} 只 ✨`, '按 PE-TTM 升序展示');
-    renderTable('condTable', rows, { max: 300 });
+    const data = await API.conditionsPresets();
+    _cpPresets = (data && data.presets) || [];
   } catch (e) {
-    hideOverlay();
-    if (_userCancelled) { showMeme('condMeme', 'farewell', '已取消这次筛选', '随时可以重新开始'); return; }
-    showMeme('condMeme', 'error', '请求失败', String(e));
+    _cpPresets = [];
+    const g = $('#cpGrid');
+    if (g) g.innerHTML = '<div class="cp-desc" style="grid-column:1/-1">预设组合加载失败，条件筛选功能不受影响。</div>';
   }
+  cpRender();
 }
 
 // ========= 形态 =========
@@ -670,11 +927,21 @@ function r9Periods() {
     ? order.filter(p => picked.includes(p)) : ['day'];
 }
 
+// 「已达成后 x 个周期」多选：返回升序 x 数组；全不选 → []（关闭该维度）
+// ⚠ 绝不在全不选时兜底成 [1,2,3]：用户明确取消了就必须真的关掉，
+//   否则界面上「我明明没勾，结果里却还有」。
+function r9AfterDays() {
+  const picked = [];
+  $$('#r9Afters .r9-after-cb').forEach(cb => { if (cb.checked) picked.push(parseInt(cb.value, 10)); });
+  return picked.filter(v => Number.isFinite(v)).sort((a, b) => a - b);
+}
+
 function r9Cfg() {
   return {
     periods: r9Periods(),
-    near_remaining: num('#r9Near', 2),
+    near_remaining: num('#r9Near', 2),      // 0 = 关闭「即将」维度
     include_triggered: $('#r9Triggered').checked,
+    after_days: r9AfterDays(),              // [] = 关闭「已达成后 x」维度
     ref_gap: num('#r9Gap', 4),
     match_window: num('#r9Win', 5),
     shrink_k: num('#r9ShrinkK', 3),
@@ -735,6 +1002,24 @@ function r9DetailTable(recs, side, unit) {
     <thead>${head}</thead><tbody>${body}</tbody></table></div>`;
 }
 
+// 维度徽章：① 即将 / ② 当天达成 / ③ 已达成后 x（可多个同时出现时逐个列出）
+// ⚠ 三个维度在同一周期内互斥（判据都基于同一个 run_last），故这里最多显示 1 个；
+//   但多周期叠加时，各周期的 period_rows 会各自带上自己的维度徽章。
+function r9DimBadge(row) {
+  const u = row.unit || '天';
+  const out = [];
+  if (row.after_x) {
+    out.push(`<span class="r9-dim r9-dim-after" title="信号日之后第 ${row.after_x} 个${u}（不含信号当天）">已过 ${row.after_x}${u}</span>`);
+  }
+  if (row.triggered) {
+    out.push(`<span class="r9-dim r9-dim-now" title="今天刚好走到第 9 个${u}，信号当日">当天九转</span>`);
+  }
+  if (row.hit_near) {
+    out.push(`<span class="r9-dim r9-dim-near" title="还没到 9，还差 ${row.remain}${u}">将到 · 差${row.remain}${u}</span>`);
+  }
+  return out.length ? `<span class="r9-dims">${out.join('')}</span>` : '';
+}
+
 // 一个周期的完整明细块（标题 + 该周期的买入/卖出两栏）
 function r9PeriodBlock(row) {
   const p = row.period;
@@ -748,9 +1033,29 @@ function r9PeriodBlock(row) {
     + (lag ? `；其中 ${lag} 条真底在信号之前（信号滞后，不计入平均 n）` : '');
   const sellSub = `共 ${row.sell_n || 0} 条，下表为最近 ${sh.length} 条`
     + (topAfter ? `；其中 ${topAfter} 条真顶在信号之后（该信号属提前预警）` : '');
+  // 信号日：仅 ③ 维度有（= 末根 bar 往前推 x 根）
+  const sigTxt = row.sig_date
+    ? ` · 信号日 <b>${row.sig_date}</b>`
+      + (row.sig_close != null ? `（收盘 ${row.sig_close}）` : '')
+      + ` · 已过 <b>${row.after_x || 0}</b>${u}`
+    : '';
+  // ★ 当前计数的文案必须与「命中的维度」一致：
+  //   ③ 已达成后 x 个周期时 cur_count 是「9 之后又走了 x 根再归约」的结果
+  //   （游程 10 → cur_count=1），直接写「当前 1/9 · 还差 8天」会严重误导 ——
+  //   该股早已达成九转，不是「还差 8 天」。这里按维度分流表述。
+  const isAfter = (row.after_x != null);
+  let cntTxt;
+  if (isAfter) {
+    cntTxt = `九转后第 <b>${row.after_x}</b>${u}`
+      + (row.run_last != null ? `（游程 ${row.run_last}）` : '');
+  } else if (row.triggered) {
+    cntTxt = `当前 <b>${row.cur_count || 0}/9</b> · <b>已达成</b>`;
+  } else {
+    cntTxt = `当前 <b>${row.cur_count || 0}/9</b> · 还差 <b>${row.remain || 0}</b>${u}`;
+  }
   const stat = `<span class="r9-pstat">`
-    + `当前 <b>${row.cur_count || 0}/9</b>`
-    + (row.triggered ? ` · <b>已达成</b>` : ` · 还差 <b>${row.remain || 0}</b>${u}`)
+    + cntTxt
+    + sigTxt
     + ` · 历史K线 <b>${row.bars_hist || 0}</b> 根${pd.label === '日线' ? '' : `（${pd.label}）`}`
     + ` · 平均n <b>${row.n_mean == null ? '—' : row.n_mean}</b>`
     + ` · 排序分 <b>${row.n_rank == null ? '—' : row.n_rank}</b>`
@@ -762,6 +1067,7 @@ function r9PeriodBlock(row) {
     ? `<div class="r9-note">⚠ ${pd.label}：${escHtml(row.note)}</div>` : '';
   return `<div class="r9-pgroup">
     <h4 class="r9-phead ${pd.cls}"><span class="r9-ptag">${pd.label}</span>
+      ${r9DimBadge(row)}
       <small>n / m 单位 = <b>${u}</b>${pd.label === '日线' ? '（交易日）' : ''}</small>
       ${stat}
     </h4>
@@ -787,6 +1093,8 @@ function r9DetailHtml(r) {
          buy_history: r.buy_history, sell_history: r.sell_history,
          buy_n: r.buy_n, sell_n: r.sell_n, n_lag: r.n_lag, m_neg: r.m_neg,
          cur_count: r.cur_count, remain: r.remain, triggered: r.triggered,
+         run_last: r.run_last, after_x: r.after_x, sig_date: r.sig_date,
+         sig_close: r.sig_close, hit_near: r.hit_near,
          bars_hist: r.bars_hist, n_mean: r.n_mean, n_rank: r.n_rank,
          n_pos: r.n_pos, sell_1y: r.sell_1y, bar_date: r.bar_date, note: r.note }];
   const multi = rows.length > 1;
@@ -819,12 +1127,18 @@ function r9Card(r, idx) {
       + `${isBest ? ' ★' : ''}</span>`;
   }).join('');
   const status = `<span class="r9-status">${escHtml(r.status || '')}</span>`;
+  // 维度徽章（多周期时取「最优档」对应的那个周期的信息，与排序档一致）
+  const bestRow = (r.by_period && r.best_period && r.by_period[r.best_period])
+    ? r.by_period[r.best_period]
+    : { unit: r.unit, after_x: r.after_x, triggered: r.triggered,
+        hit_near: r.hit_near, remain: r.remain };
   return `<div class="r9-card">
     <div class="r9-head">
       <span class="r9-rank" title="排序名次">${r.rank}</span>
       <a href="#" class="stock-link code-link r9-code" data-code="${r.code}" title="快速查看 · 站内看K线">${r.code}</a>
       <a href="${thsLink(r.code)}" target="_blank" rel="noopener noreferrer" class="stock-link name-link r9-name" title="详细查询 · 同花顺新窗口">${escHtml(r.name || '')}</a>
       <span class="r9-pbadges">${plabels}</span>
+      ${r9DimBadge(bestRow)}
       ${status}
       <span class="r9-metrics">
         <span class="r9-metric" title="历史买入九转的平均 n（只统计 n≥0 的样本；单位随命中周期）"><i>平均n</i><b>${na(r.n_mean)}</b></span>
@@ -877,15 +1191,41 @@ function renderR9(data) {
   const rankTxt = (s.shrink_k == null) ? ''
     : ` · 排序分 = (Σn + ${s.shrink_k}×该周期全市场均值) / (样本数 + ${s.shrink_k})`
       + `，各周期独立计算，叠加时取名次最优者`;
+  // 程序一三个维度的开启状态与各周期命中只数（多周期时逐周期列出，避免量纲混淆）
+  const pm = (data && data.period_meta) || {};
+  const dimTxt = plist.map(pk => {
+    const m = pm[pk] || {};
+    const pd = R9_PDEF[pk] || { label: pk };
+    const u = pd.unit || '天';
+    const seg = [];
+    if (m.hit_triggered) seg.push(`当天 <b>${m.hit_triggered}</b>`);
+    if (m.hit_near) seg.push(`即将 <b>${m.hit_near}</b>`);
+    if (m.hit_after) seg.push(`已过${(m.after_days || []).join('/')}${u} <b>${m.hit_after}</b>`);
+    return seg.length ? `<b class="r9-sum-p">${pd.label}</b>：${seg.join(' · ')} 只` : '';
+  }).filter(Boolean).join('<br>');
+  // 排序分桶提示：仅多维度并集时才启用
+  const bucketTxt = s.use_dim_bucket
+    ? `<span class="r9-buckettip">排序已按维度分档：<b>当天九转</b> → <b>即将</b> → <b>已过九转</b>，档内再按平均 n 升序</span>`
+    : '';
   if (sum) {
     const pTxt = plist.map(pk => (R9_PDEF[pk] || { label: pk }).label).join(' + ');
+    // 程序一的「条件」文案：只启用的维度才展示（near_remaining=0 表示关闭该维度）
+    const conds = [];
+    if (Number(p.near_remaining) > 0) conds.push(`即将 还差 ≤ <b>${p.near_remaining}</b> 个周期`);
+    if (p.include_triggered) conds.push(`含<b>当天达成</b>`);
+    if ((p.after_days || []).length) conds.push(`含<b>已达成后 ${p.after_days.join('/')}</b> 个周期`);
+    const forced = p.forced_near
+      ? ` · <b class="r9-warn">三个维度全未启用 → 已自动开启「即将」</b>` : '';
     sum.hidden = false;
     sum.innerHTML = `共 <b>${rows.length}</b> 只 · 数据截止 <b>${data.ref_date || '—'}</b>`
       + ` · 周期 <b>${pTxt}</b>`
-      + ` · 「即将」还差 ≤ <b>${p.near_remaining}</b> 个周期`
+      + ` · 程序一条件：${conds.join(' + ') || '—'}`
+      + forced
       + ` · |n|,|m| ≤ <b>${p.match_window}</b> · 历史回看 <b>${p.hist_years}</b> 年`
       + ` · 用时 <b>${data.elapsed || 0}s</b>`
-      + `<span class="r9-sum-note"><span class="r9-sum-per">${perTxt}</span>${rankTxt}${skTxt}</span>`;
+      + `<span class="r9-sum-note"><span class="r9-sum-per">${dimTxt || perTxt}</span>`
+      + `${dimTxt ? `<span class="r9-sum-per">${perTxt}</span>` : ''}`
+      + `${bucketTxt}${rankTxt}${skTxt}</span>`;
   }
   const shown = rows.slice(0, R9_RENDER_MAX);
   _r9Last = data;        // 明细懒渲染时按 data-idx 回查，必须先落好引用
@@ -944,8 +1284,8 @@ async function runR9() {
     _r9Last = data;
     const rows = (data && data.results) || [];
     if (!rows.length) {
-      showMeme('r9Meme', 'empty', `这轮没有「即将买入九转」的股票（${pTxt}）`,
-        '把「还差周期数」放宽、勾选「含刚达成第 9 个周期」，或加选/换一个周期再试');
+      showMeme('r9Meme', 'empty', `这轮没有符合条件的股票（${pTxt}）`,
+        '把「还差周期数」放宽、勾选「当天达成第 9 个」，或改选/加选「已达成后 1/2/3」（注意它只认恰好过了 x 个周期）');
       renderR9(data);
       return;
     }
@@ -956,8 +1296,18 @@ async function runR9() {
     const hitTxt = Object.keys(hit).length
       ? ' · 命中：' + Object.keys(R9_PDEF).filter(p => hit[p])
         .map(p => `${R9_PDEF[p].label} ${hit[p]}`).join(' / ') : '';
-    showMeme('r9Meme', 'success', `${rows.length} 只即将 / 已达成买入九转 🔁（${pTxt}）`,
-      `最优：${top} · 数据截止 ${data.ref_date || '—'}${hitTxt}`);
+    // 命中维度分布（三个维度可同时开启，各报各的只数）
+    const dm = {};
+    rows.forEach(r => (r.period_rows || []).forEach(pr => {
+      if (pr.after_x) dm.after = (dm.after || 0) + 1;
+      else if (pr.triggered) dm.now = (dm.now || 0) + 1;
+      else if (pr.hit_near) dm.near = (dm.near || 0) + 1;
+    }));
+    const dimTxt = Object.keys(dm).length
+      ? ' · 维度：' + [dm.now ? `当天 ${dm.now}` : '', dm.near ? `即将 ${dm.near}` : '',
+        dm.after ? `已过 ${dm.after}` : ''].filter(Boolean).join(' / ') : '';
+    showMeme('r9Meme', 'success', `${rows.length} 只九转候选 🔁（${pTxt}）`,
+      `最优：${top} · 数据截止 ${data.ref_date || '—'}${hitTxt}${dimTxt}`);
     renderR9(data);
   } catch (e) {
     hideOverlay();
@@ -986,6 +1336,7 @@ function downloadR9Csv() {
   const pTxt = plist.map(pk => (R9_PDEF[pk] || { label: pk }).label).join('+');
   const head = ['日期', '排名', '代码', '名称', '板块', '命中周期', '最优周期',
     '当前买入计数', '还差周期数', '已达成', '单位',
+    '命中维度', '已达成后x', '九转信号日', '信号日收盘', '排序档位',
     '历史买入9转数', '平均n(仅n≥0)', '排序分', 'n≥0样本数',
     '买入样本中真底早于信号的条数',
     '近一年卖出9转数', '历史卖出9转数', '卖出样本中真顶晚于信号的条数',
@@ -993,8 +1344,21 @@ function downloadR9Csv() {
   const lines = d.results.map(r => {
     const lbl = (r.period_labels || []).join('/');
     const best = r.best_period ? ((R9_PDEF[r.best_period] || {}).label || r.best_period) : '';
+    // 命中维度：逐周期列出（多周期可能各自命中不同维度，单位随之不同）
+    const dims = (r.period_rows || []).map(pr => {
+      const pd = R9_PDEF[pr.period] || { label: pr.period, unit: '天' };
+      const u = pd.unit || '天';
+      const seg = [];
+      if (pr.after_x) seg.push(`已过${pr.after_x}${u}`);
+      if (pr.triggered) seg.push('当天九转');
+      if (pr.hit_near) seg.push(`将到差${pr.remain}${u}`);
+      return seg.length ? `${pd.label}:${seg.join('+')}` : '';
+    }).filter(Boolean).join(';');
+    const bucketName = { 0: '当天九转', 1: '即将', 2: '已过九转' }[r.dim_bucket] || '';
     return [d.ref_date || '', r.rank, r.code, r.name, r.sector, lbl, best, r.cur_count,
       r.triggered ? 0 : r.remain, r.triggered ? '是' : '', r.unit || '',
+      dims, r.after_x == null ? '' : r.after_x, r.sig_date || '', r.sig_close == null ? '' : r.sig_close,
+      bucketName,
       r.buy_n || 0, r.n_mean == null ? '' : r.n_mean,
       r.n_rank == null ? '' : r.n_rank, r.n_pos || 0,
       r.n_lag || 0, r.sell_1y || 0, r.sell_n || 0, r.m_neg || 0,
@@ -1005,6 +1369,15 @@ function downloadR9Csv() {
     ['口径', '数据截止', d.ref_date || '', '周期', pTxt,
       '窗口(|n|,|m|)', '|n|,|m| ≤ ' + ((d.params || {}).match_window || '')],
     ['口径', '叠加规则', '各周期先分别筛选、再整体并集；参数不跨周期复用（避免用「还差 2 日」限制月线）'],
+    ['口径', '程序一条件',
+      (Number((d.params || {}).near_remaining) > 0 ? '即将还差≤' + d.params.near_remaining + '个周期 ' : '')
+      + ((d.params || {}).include_triggered ? '+ 当天达成 ' : '')
+      + (((d.params || {}).after_days || []).length
+          ? '+ 已达成后 ' + d.params.after_days.join('/') + ' 个周期' : '')],
+    ['口径', '维度口径', '「已达成后 x」= 信号日之后第 x 个周期（不含信号当天）；只认恰好过了 x 个，已过 4 个而只选 1/2/3 时不入选'],
+    ['口径', '排序规则', (d.stats || {}).use_dim_bucket
+      ? '先按维度分档（当天九转 > 即将 > 已过九转），档内再按排序分升序'
+      : '单维度，直接按排序分升序'],
     ['口径', '排序分公式', '(Σn + K×该周期全市场均值) / (样本数 + K)，K='
       + (st.shrink_k == null ? '' : st.shrink_k) + '，各周期独立计算，叠加时取名次最优者'],
   ];
@@ -1779,6 +2152,156 @@ async function runAnt() {
     hideOverlay();
     if (_userCancelled) { showMeme('antMeme', 'farewell', '已取消这次扫描', '随时可以重新开始'); return; }
     showMeme('antMeme', 'error', '请求失败', String(e));
+  }
+}
+
+// ========= 蚂蚁呀欸 · 样本形态匹配（v2：核心样本为中心 + 多时期样本加权） =========
+// 严格程度同色区间：50-80 宽松(蓝) · 81-100 标准(青) · 101-150 较严(黄) · 151-180 严格(橙) · 181-200 最严(红)
+// 轨道用**固定五段渐变**（色带宽度按区间跨度 30/20/50/30/20 归一化），
+// 滑块圆点与状态徽标取当前所处段的颜色 → 拖动时颜色随档位切换。
+const ANTSIM_BANDS = [
+  { lo: 50, hi: 80, name: '宽松', color: '#2f7fd4', hint: '门槛最低、结果最多，形似即可' },
+  { lo: 81, hi: 100, name: '标准', color: '#1f9d8f', hint: '默认档，兼顾数量与质量' },
+  { lo: 101, hi: 150, name: '较严', color: '#c9a227', hint: '门槛抬升，结果明显收窄' },
+  { lo: 151, hi: 180, name: '严格', color: '#e07b2a', hint: '只留高相似度，数量很少' },
+  { lo: 181, hi: 200, name: '最严', color: '#c0392b', hint: '极限收紧，结果最少' },
+];
+let _antsimRows = [];
+
+function antsimBand(v) {
+  const x = Math.min(200, Math.max(50, Math.round(Number(v) || 100)));
+  return ANTSIM_BANDS.find(b => x >= b.lo && x <= b.hi) || ANTSIM_BANDS[1];
+}
+
+function paintAntsimStrict() {
+  const el = $('#antStrict');
+  const wrap = $('#antStrictWrap');
+  if (!el || !wrap) return;
+  const v = Math.round(Number(el.value) || 100);
+  const b = antsimBand(v);
+  wrap.style.setProperty('--strict-color', b.color);
+  wrap.dataset.band = b.name;
+  const sv = $('#antStrictVal'); if (sv) sv.textContent = v + '%';
+  const chip = $('#antStrictChip'); if (chip) chip.textContent = b.name;
+  const hint = $('#antStrictHint'); if (hint) hint.textContent = b.hint;
+  $$('#antStrictLegend span').forEach(s => s.classList.toggle('on', Number(s.dataset.lo) === b.lo));
+}
+
+function bindAntSubTabs() {
+  const tabs = $$('#antSubTabs .sub-tab');
+  if (!tabs.length) return;
+  tabs.forEach(btn => btn.addEventListener('click', () => {
+    tabs.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const which = btn.dataset.sub;
+    const sim = $('#antSubSim'), scan = $('#antSubScan');
+    if (sim) sim.hidden = which !== 'sim';
+    if (scan) scan.hidden = which !== 'scan';
+  }));
+}
+
+function antsimStageRows() {
+  const sel = $('#antsimStage');
+  const st = sel ? sel.value : '';
+  return st ? _antsimRows.filter(r => r['周期阶段'] === st) : _antsimRows;
+}
+
+function renderAntsimTable() {
+  renderTable('antsimTable', antsimStageRows().map(r => ({
+    '代码': r['代码'], '名称': r['名称'], '板块': r['板块'],
+    '周期阶段': r['周期阶段'],
+    '综合相似度': r['综合相似度'], '核心相似度': r['核心相似度'],
+    '核心进度%': r['核心进度%'], '覆盖天数': r['覆盖天数'],
+    '多元相似度': r['多元相似度'], '同期相似度': r['同期相似度'],
+    '自身涨幅%': r['自身涨幅%'], '样本涨幅%': r['样本涨幅%'],
+    '背书样本数': r['背书样本数'],
+    '匹配样本': r['匹配样本'], '末端日期': r['末端日期'],
+  })), { max: 300 });
+  // 阶段下拉里带上计数 → 分类结果一眼可见
+  const nStart = _antsimRows.filter(r => r['周期阶段'] === '周期刚刚启动').length;
+  const nOn = _antsimRows.filter(r => r['周期阶段'] === '周期进行中').length;
+  const opts = $$('#antsimStage option');
+  if (opts[0]) opts[0].textContent = `全部（${_antsimRows.length}）`;
+  if (opts[1]) opts[1].textContent = `只看周期刚刚启动（${nStart}）`;
+  if (opts[2]) opts[2].textContent = `只看周期进行中（${nOn}）`;
+}
+
+function renderAntsimSum(stats, notes) {
+  const sum = $('#antsimSum');
+  if (!sum) return;
+  const s = stats || {};
+  const th = s.thr_combo || {};
+  const gw = s.group_weights || {};
+  const fmt = v => (v == null ? '—' : String(v));
+  const parts = [
+    ['严格程度', fmt(s.strict) + (s.strict == null ? '' : '%')],
+    ['保留比例', s.keep == null ? '—' : '前 ' + (s.keep * 100).toFixed(2) + '%'],
+    ['命中', fmt(s.hits)],
+    ['周期刚刚启动', fmt(s.start_hits)],
+    ['周期进行中', fmt(s.ongoing_hits)],
+    ['全市场候选', fmt(s.candidates)],
+    ['可用模板', fmt(s.templates)],
+    ['门槛(综合)', `${fmt(th['周期刚刚启动'])} / ${fmt(th['周期进行中'])}`],
+    ['样本组权重', Object.keys(gw).map(k => `${k} ${gw[k]}`).join(' · ') || '—'],
+  ];
+  sum.hidden = false;
+  sum.innerHTML = parts
+    .map(([k, v]) => `<span class="as-kv">${escHtml(k)} <b>${escHtml(v)}</b></span>`).join('')
+    + (notes && notes.length
+      ? `<div class="as-note">${notes.map(n => escHtml(String(n))).join('<br>')}</div>` : '');
+}
+
+async function runAntsim() {
+  hideMeme('antsimMeme');
+  const strict = Math.round(Number(($('#antStrict') || {}).value) || 100);
+  showOverlay('loading', `样本形态匹配中…（严格程度 ${strict}%）`, { cancellable: true });
+  try {
+    const data = await API.antsimRun({ strict, exchange: rangeVal() });
+    hideOverlay();
+    if (data && data.error) {
+      _antsimRows = [];
+      renderTable('antsimTable', []);
+      const sum = $('#antsimSum'); if (sum) sum.hidden = true;
+      showMeme('antsimMeme', 'error', '匹配失败', String(data.error));
+      return;
+    }
+    _antsimRows = (data && data.rows) || [];
+    renderAntsimSum(data && data.stats, (data && data.notes) || []);
+    renderAntsimTable();
+    const s = (data && data.stats) || {};
+    if (!_antsimRows.length) {
+      showMeme('antsimMeme', 'empty', '这个严格程度下没有命中', '把滑块往左拉松一点再试');
+      return;
+    }
+    showMeme('antsimMeme', 'success',
+      `命中 ${_antsimRows.length} 只：刚启动 ${s.start_hits || 0} · 进行中 ${s.ongoing_hits || 0}`,
+      `严格程度 ${strict}% · 全市场候选 ${s.candidates || 0} 只`);
+  } catch (e) {
+    hideOverlay();
+    if (_userCancelled) { showMeme('antsimMeme', 'farewell', '已取消这次匹配', '随时可以重新开始'); return; }
+    showMeme('antsimMeme', 'error', '请求失败', String(e));
+  }
+}
+
+async function refreshAntsimSamples() {
+  const box = $('#antsimSamplesBody');
+  if (!box) return;
+  try {
+    const d = await API.antsimSamples();
+    if (!d || d.error) { box.textContent = '样本库加载失败：' + ((d && d.error) || '空响应'); return; }
+    const html = (d.groups || []).map(g => `
+      <div class="as-group">
+        <div class="as-head">
+          <b>${escHtml(String(g.group))}样本</b>
+          <span class="as-w">权重 ${escHtml(String(g.weight))}</span>
+          <span class="as-n">${escHtml(String(g.count))} 条</span>
+          ${g.readonly ? '<span class="as-ro">只读（后端硬规则）</span>' : ''}
+        </div>
+        <div class="as-items">${(g.items || []).map(x => `<code>${escHtml(String(x))}</code>`).join('')}</div>
+      </div>`).join('');
+    box.innerHTML = html || '（样本库为空）';
+  } catch (e) {
+    box.textContent = '样本库加载失败：' + String(e);
   }
 }
 
@@ -3099,6 +3622,14 @@ function injectBackButtons() {
   $$('.back-btn').forEach(b => b.addEventListener('click', goBack));
 }
 
+// 条件筛选面板的事件绑定（从 init() 抽出，便于单测与「面板级」复用）
+function bindConditions() {
+  $('#btnRunCond').addEventListener('click', runConditions);
+  $('#btnCondReset').addEventListener('click', cpReset);   // 条件筛选 · 恢复默认（带确认）
+  $('#btnCondAll').addEventListener('click', () => $$('#condGrid input').forEach(cb => { cb.checked = true; cb.closest('.cond-item').classList.add('active'); }));
+  $('#btnCondNone').addEventListener('click', () => $$('#condGrid input').forEach(cb => { cb.checked = false; cb.closest('.cond-item').classList.remove('active'); }));
+}
+
 async function init() {
   // file:// 直开检测：双击 index.html 时所有 /api 请求会被浏览器拦截，给出明确指引
   if (location.protocol === 'file:') {
@@ -3126,6 +3657,7 @@ async function init() {
                   ['btnPatternCsv','patternTable','形态打分'],
                   ['btnSnapCsv','snapTable','短线快拍'],
                   ['btnAntCsv','antTable','蚂蚁扫描'],
+                  ['btnAntsimCsv','antsimTable','蚂蚁样本形态匹配'],
                   ['btnAnt1000Csv','ant1000Table','长周期筛选'],
                   ['btnSimilarCsv','similarATable','相似股A类'],
                   ['btnAlertCsv','alertSignalTable','前瞻预警核心信号']];
@@ -3134,9 +3666,7 @@ async function init() {
     if (b) b.addEventListener('click', () => downloadCsv(tid, label + '_' + new Date().toISOString().slice(0,10) + '.csv'));
   });
   $('#btnRunStrategies').addEventListener('click', runStrategies);
-  $('#btnRunCond').addEventListener('click', runConditions);
-  $('#btnCondAll').addEventListener('click', () => $$('#condGrid input').forEach(cb => { cb.checked = true; cb.closest('.cond-item').classList.add('active'); }));
-  $('#btnCondNone').addEventListener('click', () => $$('#condGrid input').forEach(cb => { cb.checked = false; cb.closest('.cond-item').classList.remove('active'); }));
+  bindConditions();                                        // 条件筛选：运行 / 全选 / 清空 / 恢复默认
   $('#btnRunPattern').addEventListener('click', runPattern);
   bindPatternSubTabs();                                    // 形态打分：经典形态 / 短线快拍 子页签
   $('#btnRunSnap').addEventListener('click', runSnap);
@@ -3147,6 +3677,18 @@ async function init() {
   $('#btnBetonExpandAll').addEventListener('click', boToggleAll);
   $('#btnBetonCsv').addEventListener('click', downloadBetonCsv);
   $('#btnRunAnt').addEventListener('click', runAnt);
+  bindAntSubTabs();                                        // 蚂蚁呀欸：样本形态匹配 / 底部四层扫描
+  const _antStrictEl = $('#antStrict');
+  if (_antStrictEl) {                                      // 严格程度滑块：拖动即变色
+    _antStrictEl.addEventListener('input', paintAntsimStrict);
+    _antStrictEl.addEventListener('change', paintAntsimStrict);
+    paintAntsimStrict();
+  }
+  const _antsimStageEl = $('#antsimStage');
+  if (_antsimStageEl) _antsimStageEl.addEventListener('change', renderAntsimTable);
+  const _btnRunAntsimEl = $('#btnRunAntsim');
+  if (_btnRunAntsimEl) _btnRunAntsimEl.addEventListener('click', runAntsim);
+  refreshAntsimSamples();                                  // 样本库（异步，失败静默）
   $('#btnRunAnt1000').addEventListener('click', runAnt1000);
   refreshAnt1000Cache();   // 长周期历史数据缓存状态（异步，失败静默）
   $('#btnRunSimilar').addEventListener('click', runSimilar);
