@@ -204,9 +204,11 @@ DOC_LINES = [
     "神奇九转：close 连续 9 个周期低于 / 高于 4 个周期前 → 买入 / 卖出九转。",
     "周期可选 日线 / 周线 / 月线，各自独立成立；「4 个周期前」在周线是 4 周、月线是 4 个月。",
     "程序一：按每个**选中的周期**分别筛出「即将到达买入九转」的股票，再整体并集（叠加非门槛）。",
-    "程序一另有两个并列维度：②「刚好达成第 9 个」；③「已达成后 x 个周期」（x = 信号日之后第 x 根 bar）。",
-    "三个维度并存、可同时勾选取并集：① 还差 ≤N 个（未到 9）；② 刚好第 9 个；③ 已过 1/2/3 个。",
-    "⚠ ③ 只认恰好过了 x 个周期：已过 4 个而只选了 x=1/2/3 时不入选（筛的是时间点，不是「至少过了 x」）。",
+    "程序一另有两个并列维度：②「刚好达成第 9 个」；③「已达成后 x 个周期」。",
+    "★ 口径（2026-10-12）：③「已达成后 x」**固定为日线口径** —— 周期（日/周/月）选择只影响 ①「还剩 xxx」与 ②「当天达成」；",
+    "   ③ 不在周/月线上判定，勾选 ③ 时日线自动加入筛选（即使未勾日线），避免「已达成后 x 周」与「已达成后 x 日」两种口径混用。",
+    "三个维度并存、可同时勾选取并集：① 还差 ≤N 个（未到 9）；② 刚好第 9 个；③ 已过 1/2/3 个（日线）。",
+    "⚠ ③ 只认**恰好**过了 x 个交易日：已过 4 个而只选了 x=1/2/3 时不入选（筛的是时间点，不是「至少过了 x」）。",
     "排序：同时勾选 ≥2 个维度时先按「当天九转 > 即将 > 已过九转」分档，档内再按历史 n 升序；单维度时不分档。",
     "程序二：对候选股拉长历史，找出该周期历史上全部九转信号，在对称窗口内定位真正的顶 / 底。",
     "买入九转：n = 真底 − 信号日；卖出九转：m = 信号日 − 真顶。单位随周期变（日 / 周 / 月）。",
@@ -387,6 +389,10 @@ def screen(cfg: dict, exchange: Optional[str], sectors: Optional[list],
       remain     还差几个该周期 bar
       after_x    ③ 维度命中的 x（已达成后第 x 个周期）；未命中该维度则为 None
       sig_date   ③ 维度下「达成第 9 个」的那个 bar 的日期（= dts[-1-x]）
+
+    ⚠ ③「已达成后 x」固定日线口径由 `run()` 保证（只给日线传非空 after_days），
+      本函数对任意 period 都按自己的 bar 判定 —— 单周期直接调用 screen(period="week")
+      并传 after_days 时仍是周线口径，这是**底层语义**，口径约束在上层。
     """
     pdef = PERIODS.get(period) or PERIODS["day"]
     # 日线窗口必须足够长，才能重采样出足够的周/月线 bar：
@@ -433,6 +439,11 @@ def screen(cfg: dict, exchange: Optional[str], sectors: Optional[list],
     lo_cnt = max(1, MAIN_LEN - near) if near_on else None
     after_days = _norm_after_days(cfg.get("after_days"))   # ③ 维度（空 = 关闭）
     min_recent = int(pdef["min_recent"])
+
+    # 三个维度全关 → 该周期不可能有任何候选，直接返回空（省一遍全市场遍历）。
+    # 触发场景：用户只勾选 ③「已达成后 x」时，run() 会把非日线周期的 after_days 清空。
+    if not near_on and not cfg["include_triggered"] and not after_days:
+        return [], {}, ref_date
 
     out: list = []
     skip: dict = {}
@@ -798,6 +809,10 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
     自己的 cfg 副本（见 `_period_cfg`），避免用日线的「还差 2 日」去限制月线九转。
     合并按 code 取并集；同一只股票命中多个周期时，各周期的 n/m 记录**分别保留**
     （它们单位不同，不能混算），主排序键取各周期中**最优（最小）**的排序分。
+
+    **③ 维度例外（2026-10-12）**：`after_days`（已达成后 x）固定为**日线口径**，
+    只在日线上判定 —— 周期选择仅作用于 ①「还剩 ≤N 个周期」与 ②「当天达成」。
+    实现：③ 开启时把 day 强制加入 `screen_periods`，并清空非日线周期的 after_days。
     """
     c = dict(DEFAULTS)
     for k, v in (cfg or {}).items():
@@ -805,6 +820,16 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
             c[k] = v
     c = _clamp_cfg(c)
     periods = _norm_periods(c.get("periods"))
+
+    # ★ ③「已达成后 x 个周期」固定为**日线口径**（用户 2026-10-12 明确要求）：
+    #   周期选择（日/周/月）只影响 ①「还剩 ≤N 个周期」与 ②「当天达成」；
+    #   ③ 始终在**日线 bar** 上判定 —— 所以 ③ 开启时强制把日线纳入实际筛选周期，
+    #   并把非日线周期的 after_days 清空（否则周线还会产出「已达成后 x 周」的
+    #   第三种口径信号，与「限定为日」冲突）。
+    _after_days_user = _norm_after_days(c.get("after_days"))
+    screen_periods = list(periods)
+    if _after_days_user and "day" not in screen_periods:
+        screen_periods.insert(0, "day")
 
     # 三个维度至少要开一个：全关时筛选结果必然为空，那是**无效输入**而非「今日无信号」。
     # 这里强制打开 ①（并把 defaults.forced_near 记进 meta，让前端能提示用户），
@@ -833,12 +858,12 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
     if not rows:
         return {"results": [], "skip_stats": {}, "ref_date": None, "cut_1y": "",
                 "stats": {}, "params": {}, "candidates": 0, "elapsed": 0.0,
-                "periods": periods}
+                "periods": screen_periods}
 
     # 日线窗口 = 各周期需求的最大值（月线要 36 个月 ≈ 750 个交易日）
     need_days = max(RECENT_WINDOW,
                     max(PERIODS[p]["recent_bars"] * int(PERIODS[p]["factor"])
-                        for p in periods))
+                        for p in screen_periods))
     # 程序二还要看 hist_years 年的历史，日线取数窗口取二者较大者，
     # 这样周/月线重采样后有足够 bar 供「历史」统计。
     hist_days = int(c["hist_years"] * 250)
@@ -846,7 +871,7 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
     if not bars_map:
         return {"results": [], "skip_stats": {"无行情数据": len(rows)}, "ref_date": None,
                 "cut_1y": "", "stats": {}, "params": {}, "candidates": 0,
-                "elapsed": round(time.time() - t0, 2), "periods": periods}
+                "elapsed": round(time.time() - t0, 2), "periods": screen_periods}
 
     present = [str(r[0]) for r in rows
                if str(r[0]) in bars_map and not bars_map[str(r[0])].empty]
@@ -854,7 +879,7 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
     if not ref_date:
         return {"results": [], "skip_stats": {"无行情数据": len(rows)}, "ref_date": None,
                 "cut_1y": "", "stats": {}, "params": {}, "candidates": 0,
-                "elapsed": round(time.time() - t0, 2), "periods": periods}
+                "elapsed": round(time.time() - t0, 2), "periods": screen_periods}
     try:
         cut_1y = (datetime.strptime(ref_date, "%Y-%m-%d") - timedelta(days=365)
                   ).strftime("%Y-%m-%d")
@@ -865,9 +890,12 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
     per_cands: dict = {}
     skip_stats: dict = {}
     period_meta: dict = {}
-    for p in periods:
+    for p in screen_periods:
         pdef = PERIODS[p]
         cp = _period_cfg(c, p)                       # ← 独立 cfg 副本（关键）
+        if p != "day":
+            # ★ ③ 固定日线口径：非日线周期关闭 ③（它们只负责 ①②，③ 由日线统一产出）
+            cp["after_days"] = []
         cp = _clamp_cfg(cp)
         if progress_cb:
             progress_cb(0, max(len(rows), 1),
@@ -934,7 +962,7 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
     K = float(c["shrink_k"])
     prior_by: dict = {}          # 每个周期自己的全市场 n 均值（收缩目标）
     thin_by: dict = {}
-    for p in periods:
+    for p in screen_periods:
         cs = per_cands.get(p) or []
         ts = sum(x.get("n_pos_sum") or 0 for x in cs)
         tc = sum(x.get("n_pos") or 0 for x in cs)
@@ -961,7 +989,7 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
                   "n_pos", "n_lag", "n_pos_sum", "n_mean", "n_min", "n_max",
                   "m_pos", "m_neg", "sell_1y", "note")
     merged: dict = {}
-    for p in periods:
+    for p in screen_periods:
         for it in per_cands.get(p) or []:
             code = it["code"]
             slot = merged.get(code)
@@ -1080,7 +1108,7 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
 
     # ---- ⑤ 汇总统计（逐周期分开报，不跨周期相加）----
     pstats: dict = {}
-    for p in periods:
+    for p in screen_periods:
         cs = per_cands.get(p) or []
         tn, tl, ts, tm = _per_period_stats(cs, cut_1y, c["show_records"])
         pstats[p] = {
@@ -1102,7 +1130,8 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
         "skip_stats": skip_stats,
         "ref_date": ref_date,
         "cut_1y": cut_1y,
-        "periods": periods,
+        # 实际参与筛选的周期（③ 开启时会自动含 day，见上方「固定日线口径」）
+        "periods": screen_periods,
         "period_meta": period_meta,
         "period_stats": pstats,
         "stats": {
@@ -1113,9 +1142,13 @@ def run(cfg: Optional[dict] = None, exchange: Optional[str] = None,
             # 排序是否启用了「维度优先」分桶（多维度并集时才启用）
             "use_dim_bucket": bool(use_bucket),
             "dim_active": int(dim_active),
+            # ★ ③ 口径披露：after_days 非空 = ③ 固定日线口径（周期选择不影响它）
+            "after_fixed_day": bool(_after_days_user),
         },
         "params": {
-            "periods": periods,
+            "periods": screen_periods,               # 实际筛选周期（含自动加入的 day）
+            "periods_user": periods,                 # 用户勾选（原样回显）
+            "after_fixed_day": bool(_after_days_user),
             "near_remaining": c["near_remaining"], "ref_gap": c["ref_gap"],
             "match_window": c["match_window"], "confirm_pct": c["confirm_pct"],
             "confirm_bars": c["confirm_bars"], "hist_years": c["hist_years"],

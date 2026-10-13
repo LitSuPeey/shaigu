@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="HZHv21P990FQbxSzkgsPhO" />
 <title>筛股 · P的初航</title>
 <link rel="icon" href="/static/memes/开心.png" data-page-node-id="h5S4fImZ9ex9nwMlFxJezf" />
+<!-- 主题预设（在样式生效前落定 data-theme，避免闪白）：默认暗色 · 可切换 -->
+<script>try{var _t=localStorage.getItem('shaigu.theme');var _ok=['dark','light','pink','blue','beige'];document.documentElement.setAttribute('data-theme',_ok.indexOf(_t)>=0?_t:'dark');}catch(e){document.documentElement.setAttribute('data-theme','dark');}</script>
 <link rel="stylesheet" href="/static/style.css" data-page-node-id="Jvq5hm14eRlOdoYLEuSvI7" />
+<link rel="stylesheet" href="/static/bfilter.css" />
 </head>
 <body data-page-node-id="EBxfdp85zWoTtRAc6o5PIW">
 
@@ -34,6 +37,33 @@
       <input type="checkbox" id="syncWithDividend" checked />含分红
     </label>
     <button class="btn btn-ghost" id="btnDivTiming" title="分红时点预测：按个股分红习惯，本周只需排查哪些股（可减少同步请求量）">🗓 分红时点</button>
+    <span class="theme-anchor">
+      <button class="btn btn-ghost" id="btnTheme" title="外观调整（5 套主题 · 记忆选择）">🎨 外观</button>
+      <!-- 外观调整面板：5 套主题，点击即切换 -->
+      <div class="theme-pop" id="themePop" hidden>
+        <div class="theme-pop-head">🎨 外观调整<em>点击即切换，自动记忆</em></div>
+        <button type="button" class="theme-item" data-theme="dark">
+          <span class="theme-sw"><i style="background:#171b23"></i><i style="background:#f0c14b"></i></span>
+          <b>暗色</b><em>罗德岛终端</em>
+        </button>
+        <button type="button" class="theme-item" data-theme="light">
+          <span class="theme-sw"><i style="background:#f5f3ef"></i><i style="background:#b86b3f"></i></span>
+          <b>亮色</b><em>羊皮纸</em>
+        </button>
+        <button type="button" class="theme-item" data-theme="pink">
+          <span class="theme-sw"><i style="background:#fdf4f7"></i><i style="background:#d4577a"></i></span>
+          <b>粉色</b><em>樱花</em>
+        </button>
+        <button type="button" class="theme-item" data-theme="blue">
+          <span class="theme-sw"><i style="background:#f1f6fc"></i><i style="background:#3b6fd4"></i></span>
+          <b>蓝色</b><em>静谧</em>
+        </button>
+        <button type="button" class="theme-item" data-theme="beige">
+          <span class="theme-sw"><i style="background:#f7f4ec"></i><i style="background:#a3823f"></i></span>
+          <b>米色</b><em>燕麦</em>
+        </button>
+      </div>
+    </span>
     <button class="btn btn-primary" id="btnSync" title="按当前范围增量同步最新行情" data-page-node-id="BfAqODPTtUepiAfDA237rd">⬇ 同步数据</button>
   </div>
 </header>
@@ -99,6 +129,7 @@
     <button class="tab" data-tab="kline" data-page-node-id="vJA6zHoASTpmdy5wXkrOI7">📈 行情查看</button>
     <button class="tab" data-tab="strategy" data-page-node-id="PbG4tAeqrF0wpNjvFTNEvo" title="来源于 GitHub 同名代码">🌲 Sequoia</button>
     <button class="tab" data-tab="bili" title="仅供学习：B站指定UP主内容中的股票提及挖掘">🎓 仅供学习</button>
+    <button class="tab" data-tab="bfilter" title="BOLL 过滤器 · 大盘状态：给任意股票池叠加 BOLL 条件 + 市场环境闸（独立新功能，不影响其它页签）">🧫 数据过滤</button>
   </nav>
 
   <!-- ===== Sequoia（原策略选股，置于末位） ===== -->
@@ -262,9 +293,12 @@
         <b>🚀 即将大涨</b> 缩量到极致 + 位置低 + 波动收缩（看 1~2 天）·
         <b>💪 反弹动能</b> V 型回踩后收在区间上沿、动能最强（右侧，可即时买入）·
         <b>🪃 即将反弹</b> 回踩缩量 + 贴着支撑 + 出现止跌信号（看 1~2 天，左侧）。</p>
+      <details class="doc-note">
+        <summary>ℹ 方法论与修正说明（点击展开）</summary>
       <p class="src-note">方法论取自「短周期大涨股量化识别」与「形态匹配」两份研究报告，并做批判性修正：
         位置 / 量能 / 带宽等门槛<strong>一律用全市场横截面分位数</strong>（研究样本仅 7 只 40 段，生存者偏差重，绝对阈值不可照搬）；
         <strong>年线 MA250 默认一票否决</strong>（40 段主升浪无一例发生在年线下方）；不使用未来函数，只吃 t 时刻及之前的收盘数据。</p>
+      </details>
       <div class="controls">
         <label>最低分
           <input type="number" id="snapMinScore" value="60" min="0" max="100" step="5" />
@@ -293,7 +327,7 @@
       <div class="actions">
         <button class="btn btn-primary" id="btnRunSnap">▶ 开始快拍</button>
         <button class="btn btn-ghost" id="btnSnapCsv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
-        <span class="hint">全市场扫描（约 10 秒），结果按总分降序；点代码看站内 K 线、点名称查同花顺。</span>
+        <span class="hint">全市场扫描（约 10 秒），结果按总分降序。</span>
       </div>
       <div class="result-meme" id="snapMeme" hidden>
         <img src="" alt="meme" />
@@ -314,9 +348,12 @@
   <section class="panel" id="tab-r9">
     <div class="panel-head">
       <h2>9Reverse9 · 神奇九转</h2>
+      <details class="doc-note">
+        <summary>ℹ 判据口径与统计说明（点击展开）</summary>
       <p><b>程序一</b>：筛出符合条件的股票，三个维度<strong>并存、可叠加</strong>：
         <b>① 即将到达</b>（还差 ≤N 个周期）、<b>② 当天达成</b>（信号日当天，游程恰好到 9）、
-        <b>③ 已达成后 x 个周期</b>（x = 1 / 2 / 3，指信号日<strong>之后第 x 个</strong>周期，不含信号当天）。
+        <b>③ 已达成后 x 个交易日</b>（x = 1 / 2 / 3，指信号日<strong>之后第 x 个交易日</strong>，不含信号当天；
+        <strong>固定日线口径</strong>，不受下方周期选择影响）。
         <b>程序二</b>：拉长历史找出全部买入 / 卖出九转信号，在信号 <strong>±5 个周期</strong>内定位真正反转日 ——
         买入记 <b>n</b>（<i>9Rev n天后开始真正反弹</i>）、卖出记 <b>m</b>（<i>9Rev 提前m天开始下行</i>），
         负值表示拐点落在信号另一侧。</p>
@@ -324,10 +361,12 @@
         <b>周期</b>可选 日线 / 周线 / 月线，三者各自独立成立（周线的「4 个周期前」= 4 周，月线 = 4 个月），
         勾选多个即<strong>叠加筛选</strong>：各周期<strong>先分别筛选、再整体并集</strong>（叠加是加分项，不是入选门槛），
         n / m 的单位随周期走（日 / 周 / 月），互不混算。
-        三个维度<strong>同样先分别判定、再取并集</strong>，x 的单位也随周期；⚠ ③ 只认<strong>恰好</strong>过了 x 个周期，已过 4 个而只选了 1/2/3 时<strong>不入选</strong>。
+        ★ <strong>周期选择只影响 ①「还剩 xxx」与 ②「当天达成」</strong>；③「已达成后 x」<strong>固定为日线口径</strong>（勾选 ③ 时日线自动加入筛选）。
+        三个维度<strong>同样先分别判定、再取并集</strong>；⚠ ③ 只认<strong>恰好</strong>过了 x 个<strong>交易日</strong>，已过 4 个而只选了 1/2/3 时<strong>不入选</strong>。
         <b>排序</b>：同时勾选 ≥2 个维度时先按 <b>当天九转 &gt; 即将 &gt; 已过九转</b> 分档，档内再按「历史样本量收缩后的平均 n」升序
         （越小越靠前），避免「只出现过 1 次恰好见底」的股票霸榜；K 可调，设 0 即关闭收缩。单维度时不分档，直接按平均 n 排。
         实测：多数卖出九转的<strong>真顶落在信号之后</strong>，更像「提前预警」而非见顶确认（比例见扫描汇总条）。</p>
+      </details>
     </div>
 
     <div class="controls">
@@ -335,16 +374,16 @@
         <input type="number" id="r9Near" value="2" min="0" max="8" step="1" /> 个周期到达买入九转
       </label>
       <label class="inline" title="游程恰好停在 9（信号当天）。开启后排序会按「当天 &gt; 即将 &gt; 已过」分档"><input type="checkbox" id="r9Triggered" /> 含「当天达成第 9 个」（当天九转）</label>
-      <label class="r9-after-label" title="已达成第 9 个之后，信号发出的第 x 个周期仍在延续。x=1 即信号后第 1 天（不含信号当天，当天请用左边的「当天达成」）。可多选，取并集；全不选 = 关闭该维度">
+      <label class="r9-after-label" title="已达成第 9 个之后，信号发出的第 x 个交易日仍在延续。x=1 即信号后第 1 个交易日（不含信号当天，当天请用左边的「当天达成」）。可多选，取并集；全不选 = 关闭该维度。★ 固定日线口径：不受右侧「周期」选择影响">
         <span class="r9-after-cap">已达成后</span>
         <span class="r9-afters" id="r9Afters">
           <label class="r9-achip"><input type="checkbox" class="r9-after-cb" value="1" /> 1</label>
           <label class="r9-achip"><input type="checkbox" class="r9-after-cb" value="2" /> 2</label>
           <label class="r9-achip"><input type="checkbox" class="r9-after-cb" value="3" /> 3</label>
         </span>
-        <span class="r9-after-unit">个周期</span>
+        <span class="r9-after-unit">个交易日（日线）</span>
       </label>
-      <label class="r9-periods-label" title="勾选多个 = 叠加筛选（并集）；各周期先分别筛选再合并，参数不跨周期复用">
+      <label class="r9-periods-label" title="勾选多个 = 叠加筛选（并集）；各周期先分别筛选再合并，参数不跨周期复用。★ 此选择只影响 ①「还剩 xxx」与 ②「当天达成」；③「已达成后 x」固定日线口径">
         <span class="r9-periods-cap">周期（可叠加）</span>
         <span class="r9-periods" id="r9Periods">
           <label class="r9-pchip"><input type="checkbox" class="r9-period-cb" value="day" checked /> 日线</label>
@@ -376,7 +415,7 @@
       <button class="btn btn-primary" id="btnRunR9">▶ 开始扫描</button>
       <button class="btn btn-ghost" id="btnR9ExpandAll" title="一键展开 / 收起全部明细">⇕ 全部展开</button>
       <button class="btn btn-ghost" id="btnR9Csv" title="下载当前结果 CSV（含历史明细）">⬇ 下载 CSV</button>
-      <span class="hint">程序一全市场计数约 2 秒 → 程序二只对候选股拉长历史统计。点代码看站内 K 线、点名称查同花顺。</span>
+      <span class="hint">程序一全市场计数约 2 秒 → 程序二只对候选股拉长历史统计。</span>
     </div>
 
     <div class="result-meme" id="r9Meme" hidden>
@@ -400,12 +439,15 @@
       <p>目标：找出<strong>可能持续一年以上</strong>的上涨行情，回答三件事 ——
         <b>① 能不能买</b>（买点档 + 0~100 评分）、<b>② 还能走多久</b>（按该股自身历史周期推算，单位自动切 周 / 月 / 年）、
         <b>③ 什么时候卖</b>（目标价区间 + 卖出纪律线）。</p>
+      <details class="doc-note">
+        <summary>ℹ 诚实边界与数据口径（点击展开）</summary>
       <p class="src-note"><b>诚实边界</b>：素材的两轮长周期研究结论都是 <code>RESEARCH_REJECTED</code> ——
         run1 的 Deflated Sharpe 仅 0.81（&lt; 0.95）、Haircut 后夏普 1.25→0.64；run2 的「提前埋伏」净增量仅 +1.49pp、8 年 4 年为负；
         横截面复核发现位置类因子对未来 120 日收益为<b>负向</b>。故本模块<b>不假装能预测</b>，
         只把研究里<b>唯一未被否掉</b>的「状态基线」当主锚（实测 120 日胜率 67.94%）。</p>
       <p class="src-note">数据：长历史来自 <code>data/hist.db</code>（1990 起、<b>前复权</b>），与主库 <code>daily</code> 合并（两库同为前复权）。
         打分只用 <strong>t 时刻及之前</strong>的数据；周期统计需 t 之后的行情确认段落，<strong>不参与打分</strong>。不构成投资建议。</p>
+      </details>
     </div>
 
     <div class="controls">
@@ -467,7 +509,7 @@
       <button class="btn btn-primary" id="btnRunBeton">▶ 开始扫描</button>
       <button class="btn btn-ghost" id="btnBetonExpandAll" title="一键展开 / 收起全部「详细」">⇕ 全部展开</button>
       <button class="btn btn-ghost" id="btnBetonCsv" title="下载当前结果 CSV（含得分构成与周期明细）">⬇ 下载 CSV</button>
-      <span class="hint">全市场约 15 秒（长历史读取占大头）。点代码看站内 K 线、点名称查同花顺、点「详细 ▾」看入选理由与卖出纪律。</span>
+      <span class="hint">全市场约 15 秒（长历史读取占大头）。点「详细 ▾」看入选理由与卖出纪律。</span>
     </div>
 
     <div class="result-meme" id="boMeme" hidden>
@@ -506,6 +548,8 @@
         在全市场找<b>当前走势与之相似</b>的股票，并按「周期走到样本的哪一步」分成
         <b class="sim-pill sim-start">周期刚刚启动</b> / <b class="sim-pill sim-on">周期进行中</b>。
       </p>
+      <details class="doc-note">
+        <summary>ℹ 相似度口径与免责说明（点击展开）</summary>
       <p class="src-note">
         <b>综合相似度</b> = Σ(组权重 × 组内最佳相似度) / Σ(组权重)（核心 1.00 · 多元 0.75 · 同期 0.60）；
         单模板相似度 = 100 × (0.65×价形相关 + 0.20×幅度接近度 + 0.15×量形相关)，
@@ -513,6 +557,7 @@
         门槛按<b>全市场横截面分位数</b>取（不是固定分数），严格程度越高保留越少。
         <b>本模块按需求不做样本外/过拟合检验（允许过拟合）</b>，样本量小、生存者偏差明显，排名不代表未来收益。
       </p>
+      </details>
 
       <div class="strict-wrap" id="antStrictWrap" data-band="std">
         <div class="strict-head">
@@ -764,7 +809,8 @@
       ）</span>
       <label class="inline"><input type="checkbox" id="alertSecForeign" checked /> 外资重仓</label>
       <label class="inline"><input type="checkbox" id="alertSecCrowding" checked /> 拥挤度监控</label>
-      <label class="inline"><input type="checkbox" id="alertSecChains" checked /> 传导链与宏观</label>
+      <label class="inline"><input type="checkbox" id="alertSecChains" checked /> 产业链传导</label>
+      <label class="inline"><input type="checkbox" id="alertSecMacro" checked /> 宏观雷达</label>
       <label class="inline"><input type="checkbox" id="alertSecSpecial" checked /> 特殊概念</label>
     </div>
     <details class="adv-params">
@@ -841,7 +887,7 @@
         <div class="sec-purpose">回答：上游涨价后哪些中游还没跟上？标出「时滞机会」，<b>只作观察链</b>、不等同因果。</div>
         <table class="result-table small" id="alertChainTable"><thead></thead><tbody></tbody></table></div>
 
-      <div class="sim-block" id="macroOuterBlock" style="grid-column: 1 / -1"><h3 class="sec-toggle" data-sec="chains" title="点击选入/踢出该模块（同步上方勾选）">🧭 宏观雷达 · 外部环境往哪走</h3>
+      <div class="sim-block" id="macroOuterBlock" style="grid-column: 1 / -1"><h3 class="sec-toggle" data-sec="macro" title="点击选入/踢出该模块（同步上方勾选）">🧭 宏观雷达 · 外部环境往哪走</h3>
         <div class="sec-purpose">回答：外部环境在往哪走？只做「有回波才显示」的主题归类 + 方向信号，<b>不是利率预测</b>。</div>
         <div class="hint" id="macroNarrative" style="margin-bottom:8px"></div>
         <div class="macro-grid" id="macroCards"></div></div>
@@ -1018,18 +1064,20 @@
     </details>
   </section>
 
-  <!-- ===== 行情查看 ===== -->
+  <!-- ===== 行情查看 · K 线工作站 ===== -->
   <section class="panel" id="tab-kline" data-page-node-id="CyLHBZdq4DNwgl4joHDbBl">
     <div class="panel-head" data-page-node-id="j1xQhnVbfdMK4zjkg88ADX">
-      <h2 data-page-node-id="scovdVdsi9uqsyPWGFT1oA">行情查看</h2>
-      <p data-page-node-id="EFgTb8QPHGxvCso3FtCqEc">单只 K 线 + MA5/10/20/60，涨红跌绿。点结果表<b>代码</b>＝快速查看（跳到这里），点<b>名称/简称</b>＝同花顺详细页。</p>
+      <h2 data-page-node-id="scovdVdsi9uqsyPWGFT1oA">📈 行情查看</h2>
+      <p data-page-node-id="EFgTb8QPHGxvCso3FtCqEc">个股与指数 K 线（MA5/10/20/60 + 成交量，涨红跌绿）。<b>滚轮缩放 · 拖拽平移 · 双击复位 · 悬停查看当日明细</b>；
+        点其它结果表里的<b>代码</b>可一键跳到这里。</p>
     </div>
     <div class="controls" data-page-node-id="xitmjJ7NFkDCNC2a6Hh4v9">
-      <label data-page-node-id="SENOQ8JMp8OsHsHvmmHbHT">股票代码
-        <input type="text" id="klineCode" placeholder="600519" data-page-node-id="2nDR8ZGp6r422cyd1wd9FQ" />
+      <label data-page-node-id="SENOQ8JMp8OsHsHvmmHbHT">代码 / 指数
+        <input type="text" id="klineCode" placeholder="600519 或 sh000300" autocomplete="off" data-page-node-id="2nDR8ZGp6r422cyd1wd9FQ" />
       </label>
       <label data-page-node-id="OFmKS10JG5raBUH8QOWHZJ">K 线天数
         <select id="klineDays" data-page-node-id="Y7g0EbBn0SzgoPg1rIV7TQ">
+          <option value="30">30 日</option>
           <option value="60" data-page-node-id="Xvx6OVzDe3LxH77iNs6Cmi">60 日</option>
           <option value="120" selected data-page-node-id="cvx9iaKal9aRB8OfcdLVOm">120 日</option>
           <option value="250" data-page-node-id="Cbh8GzjrNHbqpabDd8QzNe">250 日</option>
@@ -1041,6 +1089,8 @@
     </div>
     <div class="actions" data-page-node-id="uHHf1jf1n9ShSMKYWu6mBL">
       <button class="btn btn-primary" id="btnLoadKline" data-page-node-id="hWzZst2XiLrrBWCmBQDxiz">▶ 加载 K 线</button>
+      <button class="btn btn-ghost" id="btnKlineImg" title="把当前图表导出为高清图片（新窗口打开）">📷 导出图片</button>
+      <span class="hint">悬停看明细 · 滚轮缩放 · 拖拽平移 · 双击复位</span>
     </div>
     <div class="result-meme" id="klineMeme" hidden data-page-node-id="XISvFCz5V9lva4ZwzWtwip">
       <img src="" alt="meme" data-page-node-id="uFeEjQmVb2eymm33WwrcDh" />
@@ -1049,8 +1099,42 @@
         <div class="meme-sub" data-page-node-id="49kSIb8BC8rwi3oVm9QAOZ"></div>
       </div>
     </div>
-    <div class="chart-wrap" data-page-node-id="uQfYwhzUZSzgw51xFPtgxk">
-      <canvas id="klineChart" width="1100" height="420" data-page-node-id="76MoXVOIGXiUDRzL1kBO8G"></canvas>
+
+    <!-- 空态：示例一键开始 -->
+    <div class="kline-empty" id="klineEmpty">
+      <img class="ke-meme" src="/static/memes/表情套组_默认_你请先选！.png" alt="choose" />
+      <p>输入股票代码或指数代码开始 —— 指数请加 <code>sh</code> / <code>sz</code> 前缀（如 <code>sh000300</code>）</p>
+      <div class="ke-chips" id="klineChips">
+        <button type="button" data-code="600519">600519 贵州茅台</button>
+        <button type="button" data-code="000001">000001 平安银行</button>
+        <button type="button" data-code="300750">300750 宁德时代</button>
+        <button type="button" data-code="sh000300">sh000300 沪深300 · 指数</button>
+      </div>
+    </div>
+
+    <!-- 信息条（加载后显示） -->
+    <div class="kboard" id="kBoard" hidden>
+      <div class="kb-top">
+        <span class="kb-code" id="kbCode">—</span>
+        <span class="kb-name" id="kbName"></span>
+        <span class="kb-tag" id="kbTag" hidden>指数</span>
+        <span class="kb-price" id="kbPrice">—</span>
+        <span class="kb-chg" id="kbChg"></span>
+        <span class="kb-ma" id="kbMa" title="点击可开关对应均线 / 布林线">
+          <button type="button" class="kb-ma-btn on" data-ma="5">MA5</button>
+          <button type="button" class="kb-ma-btn on" data-ma="10">MA10</button>
+          <button type="button" class="kb-ma-btn on" data-ma="20">MA20</button>
+          <button type="button" class="kb-ma-btn on" data-ma="60">MA60</button>
+          <button type="button" class="kb-boll-btn off" data-boll="1" title="布林线 BOLL(20, 2σ)：中轨=MA20，上下轨=中轨±2倍标准差。默认关闭">BOLL</button>
+        </span>
+      </div>
+      <div class="kb-stats" id="kbStats"></div>
+    </div>
+
+    <!-- 图表舞台 -->
+    <div class="chart-wrap kline-stage" id="klineStage" hidden data-page-node-id="uQfYwhzUZSzgw51xFPtgxk">
+      <canvas id="klineChart" width="1100" height="560" data-page-node-id="76MoXVOIGXiUDRzL1kBO8G"></canvas>
+      <div class="ktip" id="klineTip" hidden></div>
     </div>
   </section>
 
@@ -1220,6 +1304,96 @@
   </div>
 </div>
 
+<!-- ===== 数据过滤（BOLL 过滤器 + 大盘状态）· 独立新功能 ===== -->
+<section class="panel" id="tab-bfilter">
+  <div class="panel-head">
+    <h2>🧫 数据过滤</h2>
+    <p>给任意股票代码池叠加 <b>BOLL 过滤器</b>，并用 <b>大盘状态</b>做环境闸。独立于其它页签，不改变原有任何模块的行为。</p>
+  </div>
+
+  <!-- 大盘状态条 -->
+  <div class="bf-market" id="bfMarket">
+    <div class="bfm-left">
+      <span class="bfm-label">大盘状态</span>
+      <span class="bfm-badge state-unknown" id="bfmBadge">加载中…</span>
+      <span class="bfm-desc" id="bfmDesc"></span>
+    </div>
+    <div class="bfm-right">
+      <span class="bfm-meta" id="bfmMeta"></span>
+      <button class="btn btn-ghost btn-sm" id="bfmRefresh" title="重新读取最新市场状态">↻ 刷新</button>
+    </div>
+  </div>
+
+  <!-- 历史分布条 -->
+  <div class="bf-dist" id="bfDist"></div>
+
+  <!-- ★诚实披露：过滤器是择时器不是增强器 -->
+  <details class="bf-disclose" id="bfDisclose" open>
+    <summary>⚠ 实测结论披露（务必先看）</summary>
+    <div class="bfd-body">
+      <p><b>这个过滤器是「筛子」，不是「增强器」——实测超额为负。</b></p>
+      <p class="bfd-sub">口径：长历史库近 3 年 · 每个交易日对 547 只样本判定条件 · 38.9 万个评测时点 · 命中组 vs 未命中组（同一时点同一批股票 ⇒ 剔除大盘影响，差值是真 alpha）。</p>
+      <table class="bfd-table">
+        <thead><tr><th>条件</th><th>跨度</th><th>命中胜率</th><th>未中胜率</th><th>alpha(胜率)</th><th>alpha(均值收益)</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="3">⑭ 下轨低吸</td><td>T+20</td><td>53.2%</td><td>53.6%</td><td class="neg">−0.44pp</td><td class="neg">−0.81pp</td></tr>
+          <tr><td>T+60</td><td>59.3%</td><td>56.8%</td><td class="pos">+2.50pp</td><td class="neg">−0.86pp</td></tr>
+          <tr><td>T+120</td><td>66.3%</td><td>65.7%</td><td class="pos">+0.63pp</td><td class="neg">−3.50pp</td></tr>
+          <tr><td rowspan="3">⑮ 中轨突破</td><td>T+20</td><td>45.8%</td><td>53.6%</td><td class="neg">−7.77pp</td><td class="neg">−2.89pp</td></tr>
+          <tr><td>T+60</td><td>53.1%</td><td>57.1%</td><td class="neg">−4.03pp</td><td class="neg">−2.75pp</td></tr>
+          <tr><td>T+120</td><td>61.3%</td><td>65.8%</td><td class="neg">−4.53pp</td><td class="neg">−2.29pp</td></tr>
+        </tbody>
+      </table>
+      <ul>
+        <li><b>⑭ 下轨</b>：T+60 胜率有 +2.50pp 正超额，但<b>均值收益全期为负</b>（T+120 −3.50pp）→ 典型的「赢面高一点、但输的时候输更多」。</li>
+        <li><b>⑮ 突破</b>：<b>胜率与均值全期为负</b>（T+20 甚至 −7.77pp）。</li>
+        <li>大盘状态过滤（另测）：⑭/⑮ 在强牛下胜率分别 +2.1pp / +2.2pp，但<b>同期基准本身就有 50.8%</b>，超额 alpha 仍是负的 → 提升来自 beta，不是选股能力。</li>
+        <li><b>结论</b>：把它当<b>「缩小范围、降低出手次数」的筛子</b>用；<b>不要</b>理解为「信号质量变好了」。</li>
+      </ul>
+    </div>
+  </details>
+
+  <!-- 运行参数 -->
+  <div class="controls bf-controls">
+    <label>大盘闸
+      <select id="bfGate">
+        <option value="any">不限（任何市场状态都放行）</option>
+        <option value="bull">温和上行及以上（净站上 MA60）</option>
+        <option value="strong">仅强牛（净值 &gt; MA60 &gt; MA120）</option>
+      </select>
+    </label>
+    <label>股票池来源
+      <select id="bfScope"></select>
+    </label>
+    <label class="bf-codes-wrap" id="bfCodesWrap" hidden>股票代码
+      <input type="text" id="bfCodes" placeholder="如 000001,600519,300750（逗号/空格/换行分隔）" />
+    </label>
+    <label>最少K线
+      <input type="number" id="bfMinBars" value="120" min="30" step="10" />
+    </label>
+    <button class="btn btn-primary" id="btnBfRun">🧫 开始过滤</button>
+    <button class="btn btn-ghost btn-sm" id="btnBfExport" title="导出为 CSV">⬇ 导出 CSV</button>
+  </div>
+
+  <div class="bf-pool-hint" id="bfPoolHint"></div>
+
+  <!-- 过滤器多选 -->
+  <div class="bf-filters" id="bfFilters">
+    <div class="bf-sec-title">BOLL 过滤器（多选取并集）</div>
+    <div class="bf-chk-row" id="bfChkRow"></div>
+    <div class="bf-msg" id="bfMsg"></div>
+  </div>
+
+  <!-- 结果 -->
+  <div class="bf-result">
+    <div class="bf-res-head">
+      <span id="bfResCount">—</span>
+      <span class="bf-note" id="bfResNote"></span>
+    </div>
+    <div id="bfTable"></div>
+  </div>
+</section>
+
 <!-- ========= 全局 loading 遮罩 ========= -->
 <div class="meme-overlay" id="overlay" hidden data-page-node-id="9wRBdZoHB6ZeSyfaLk2KLF">
   <img id="overlayImg" src="" alt="loading" data-page-node-id="bfB9aylJkC5VdPCpTEl4W2" />
@@ -1245,5 +1419,7 @@
 <button class="gif-float-restore" id="gifFloatRestore" title="恢复悬浮窗" hidden>🐰</button>
 
 <script src="/static/app.js"></script>
+<script src="/static/kline.js"></script>
+<script src="/static/bfilter.js"></script>
 </body>
 </html>

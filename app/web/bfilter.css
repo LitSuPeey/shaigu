@@ -1,0 +1,132 @@
+/* ==========================================================================
+   数据过滤（BOLL 过滤器 + 大盘状态）· 独立新功能样式
+   --------------------------------------------------------------------------
+   单独成文件，避免污染 style.css；类名统一 bf- 前缀，避免与旧样式冲突。
+   涨=红 / 跌=绿（A股口径）；明暗双主题，颜色全部走 style.css 的变量。
+   ========================================================================== */
+
+/* ---------- 大盘状态条 ---------- */
+.bf-market {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px 14px;
+  padding: 12px 14px; margin: 0 0 10px;
+  background: var(--bg-card); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow);
+}
+.bfm-left { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }
+.bfm-label { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); }
+.bfm-desc { font-size: 12px; color: var(--ink-faint); }
+.bfm-right { display: flex; align-items: center; gap: 10px; }
+.bfm-meta { font-size: 11.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+.bfm-badge {
+  display: inline-block; padding: 3px 11px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; border: 1px solid transparent;
+  white-space: nowrap;
+}
+.bfm-badge.state-strong { background: var(--st-strong-bg); color: var(--st-strong-ink); border-color: var(--st-strong-bd); }
+.bfm-badge.state-bull   { background: var(--st-bull-bg); color: var(--st-bull-ink); border-color: var(--st-bull-bd); }
+.bfm-badge.state-bear   { background: var(--st-bear-bg); color: var(--st-bear-ink); border-color: var(--st-bear-bd); }
+.bfm-badge.state-unknown{ background: var(--st-unk-bg); color: var(--st-unk-ink);   border-color: var(--st-unk-bd); }
+
+/* ---------- 历史分布 ---------- */
+.bf-dist {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin: 0 0 12px; font-size: 11.5px; color: var(--ink-soft);
+}
+.bfd-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--bg-card); border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.bfd-bar {
+  display: inline-block; height: 7px; border-radius: 4px; min-width: 2px;
+  background: var(--accent-soft);
+}
+.bfd-item.state-strong .bfd-bar { background: var(--st-strong-ink); }
+.bfd-item.state-bull   .bfd-bar { background: var(--st-bull-ink); }
+.bfd-item.state-bear   .bfd-bar { background: var(--st-bear-ink); }
+.bfd-item.state-unknown .bfd-bar { background: var(--st-unk-ink); }
+
+/* ---------- 披露块 ---------- */
+.bf-disclose {
+  margin: 0 0 12px; padding: 10px 14px;
+  background: var(--bg-card); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); font-size: 12.5px; line-height: 1.65;
+}
+.bf-disclose summary { cursor: pointer; font-weight: 600; color: var(--accent-deep); }
+.bf-disclose summary::before { content: "▸ "; }
+.bf-disclose[open] summary::before { content: "▾ "; }
+.bfd-body { padding: 6px 0 2px; color: var(--ink-soft); }
+.bfd-body p { margin: 6px 0; }
+.bfd-body ul { margin: 6px 0; padding-left: 20px; }
+.bfd-body li { margin: 3px 0; }
+.bfd-body b { color: var(--ink); }
+.bfd-sub { font-size: 11.5px; color: var(--ink-faint); line-height: 1.6; }
+
+.bfd-table {
+  width: 100%; border-collapse: collapse; margin: 8px 0;
+  font-size: 12px; font-variant-numeric: tabular-nums;
+  background: var(--bg-card);
+}
+.bfd-table th, .bfd-table td {
+  border: 1px solid var(--line); padding: 4px 8px; text-align: right;
+}
+.bfd-table th {
+  background: var(--bg-soft); color: var(--ink-soft);
+  font-weight: 600; text-align: center; white-space: nowrap;
+}
+.bfd-table td:first-child { text-align: left; font-weight: 600; color: var(--ink); }
+.bfd-table td:nth-child(2) { text-align: center; }
+.bfd-table td.neg { color: var(--bad); }
+.bfd-table td.pos { color: var(--good); }
+
+/* ---------- 池提示 ---------- */
+.bf-pool-hint {
+  margin: 8px 0 4px; font-size: 12.5px; line-height: 1.6; color: var(--ink-soft);
+}
+.bf-pool-hint.info { color: var(--ink-faint); }
+.bf-pool-hint.ok { color: var(--accent-deep); }
+.bf-pool-hint.warn { color: var(--good); }
+.bf-pool-hint:empty { display: none; }
+
+/* ---------- 控制区 ---------- */
+.bf-controls { flex-wrap: wrap; align-items: flex-end; }
+.bf-codes-wrap input { min-width: 320px; }
+
+/* ---------- 过滤器多选 ---------- */
+.bf-filters {
+  margin: 12px 0; padding: 12px 14px;
+  background: var(--bg-card); border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.bf-sec-title { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); margin-bottom: 8px; }
+.bf-chk-row { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.bf-chk {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; cursor: pointer; user-select: none;
+}
+.bf-chk input { cursor: pointer; }
+.bf-chk small { color: var(--ink-faint); font-size: 11px; }
+
+.bf-msg { margin-top: 8px; font-size: 12.5px; }
+.bf-msg.warn { color: var(--good); }
+.bf-msg.info { color: var(--ink-soft); }
+
+/* ---------- 结果 ---------- */
+.bf-result { margin-top: 6px; }
+.bf-res-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px;
+  margin: 0 0 8px; font-size: 13px; color: var(--ink-soft);
+}
+#bfResCount { font-weight: 600; color: var(--ink); }
+.bf-note { font-size: 11.5px; color: var(--ink-faint); }
+
+/* 状态闸拦下时的提示卡 */
+.bf-gate-block {
+  padding: 14px 16px; border-radius: var(--radius-sm);
+  background: var(--st-bull-bg); border: 1px solid var(--st-bull-bd);
+  font-size: 13px; color: var(--st-bull-ink); line-height: 1.6;
+}
+.bf-gate-block b { color: var(--st-bull-ink); }

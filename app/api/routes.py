@@ -14,8 +14,8 @@ from pydantic import BaseModel
 from ..core import db as core_db
 from ..core import ranges
 from ..core import sync as core_sync
-from ..modules import (alert, ant, ant1000, antsim, beton, bili, conditions, cycle,
-                       futures, pattern, reverse9, similar, snap, strategies, ticker)
+from ..modules import (alert, ant, ant1000, antsim, beton, bili, bollfilter, conditions,
+                       cycle, futures, pattern, reverse9, similar, snap, strategies, ticker)
 
 router = APIRouter()
 
@@ -361,23 +361,75 @@ def stocks(exchange: Optional[str] = None,
     return df.to_dict(orient="records")
 
 
+# 指数名称表（ant_index 表目前只同步了沪深300；未列出的 symbol 原样显示）
+INDEX_NAMES = {
+    "sh000300": "沪深300", "sh000001": "上证指数", "sz399001": "深证成指",
+    "sz399006": "创业板指", "sh000016": "上证50", "sh000905": "中证500",
+    "sh000985": "中证全指", "sz399317": "国证A指",
+}
+
+
+def _resolve_index_symbol(code: str):
+    """把用户输入规范成 ant_index 的 symbol（如 sh000300）。
+    规则：显式 sh/sz 前缀直接采用；纯 6 位数字依次试 sh/sz/bj 前缀；
+    个股（daily 表）优先于指数 —— 想显式看指数请加 sh/sz 前缀（如 sh000001）。"""
+    c = str(code).strip().lower()
+    if re.fullmatch(r"(sh|sz|bj)\d{6}", c):
+        return c
+    if re.fullmatch(r"\d{6}", c):
+        return ["sh" + c, "sz" + c, "bj" + c]
+    return None
+
+
 @router.get("/api/kline")
 def kline(code: str, days: int = 120):
     rconn = core_db.reader()
+    code = str(code).strip()
     # 多取 60 根作均线预热段：MA60 需 60 根收盘价才可计算，
     # 若只取 days 根，显示区间前段 MA 线必然缺角。前端只显示最后 days 根，
     # MA 用全量（含预热段）计算，保证显示窗口内四条均线全程可画。
     df = pd.read_sql_query(
         f"SELECT date, open, high, low, close, volume, amount "
         f"FROM daily WHERE code=? ORDER BY date DESC LIMIT ?",
-        rconn, params=(str(code).zfill(6), int(days) + 60))
+        rconn, params=(code.zfill(6), int(days) + 60))
+    is_index = False
+    idx_sym = None
+    if df.empty:
+        # 指数回退（与前端 K 线界面适配）：个股查不到时尝试 ant_index 指数表
+        syms = _resolve_index_symbol(code)
+        if isinstance(syms, str):
+            syms = [syms]
+        for s in (syms or []):
+            d2 = pd.read_sql_query(
+                "SELECT date, open, high, low, close, volume "
+                "FROM ant_index WHERE symbol=? ORDER BY date DESC LIMIT ?",
+                rconn, params=(s, int(days) + 60))
+            if not d2.empty:
+                df, is_index, idx_sym = d2, True, s
+                break
     if df.empty:
         return {"code": code, "bars": []}
     df = df.iloc[::-1].reset_index(drop=True)
+    # 名称：个股走 meta 表；指数走名称表（未知 symbol 原样）
+    name = ""
+    if is_index:
+        name = INDEX_NAMES.get(idx_sym, idx_sym.upper() if idx_sym else "")
+    else:
+        row = rconn.execute("SELECT name FROM meta WHERE code=?", (code.zfill(6),)).fetchone()
+        name = (row[0] if row else "") or ""
+    # 涨跌基准：最后一根之前的一根收盘价（前端用于算最新涨跌幅）
+    prev_close = None
+    if len(df) >= 2:
+        pc = float(df["close"].iloc[-2])
+        if math.isfinite(pc):
+            prev_close = pc
     return {
         "code": code,
+        "name": name,
+        "is_index": is_index,
         "display_days": int(days),
-        "bars": df.assign(date=df["date"].astype(str)).to_dict(orient="records"),
+        "prev_close": prev_close,
+        "bars": clean_records(df.assign(date=df["date"].astype(str)).to_dict(orient="records")),
     }
 
 
@@ -504,6 +556,147 @@ def conditions_run(req: ConditionReq):
                             max_workers=req.max_workers,
                             progress_cb=_task_progress)
         return {"rows": clean_records(df.to_dict(orient="records"))}
+    except TaskCancelled:
+        return _cancelled_response()
+    finally:
+        _task_done()
+
+
+# ============ BOLL 过滤器 · 大盘状态（新增加功能，不改动已有模块）============
+@router.get("/api/bollfilter/market")
+def bollfilter_market(asof: Optional[str] = None):
+    """当前（或指定日）大盘状态 + 历史分布。"""
+    return {"market": bollfilter.market_state(asof=asof),
+            "labels": bollfilter.STATE_LABEL,
+            "descs": bollfilter.STATE_DESC}
+
+
+@router.get("/api/bollfilter/series")
+def bollfilter_series(start: Optional[str] = None, end: Optional[str] = None):
+    """区间内逐日市场状态（供前端画状态带）。"""
+    return {"series": bollfilter.market_state_series(start, end)}
+
+
+@router.get("/api/bollfilter/filters")
+def bollfilter_filters():
+    """可用过滤器清单。"""
+    return {"filters": [{"key": k, "label": v["label"]}
+                        for k, v in bollfilter.FILTERS.items()]}
+
+
+@router.get("/api/bollfilter/sources")
+def bollfilter_sources():
+    """可作为股票池来源的已有模块（供「数据过滤」页签一键取池）。"""
+    return {"sources": [
+        {"key": "market", "label": "全市场", "desc": "条件筛选的股票池口径（剔 ST / 次新）",
+         "slow": False},
+        {"key": "beton_main", "label": "Bet on 主榜", "desc": "长期布局主榜（门槛 60）",
+         "slow": True},
+        {"key": "beton_watch", "label": "Bet on 观察榜", "desc": "长期布局宽松轨（⚠ 不是推荐）",
+         "slow": True},
+        {"key": "reverse9", "label": "9Reverse9 入选", "desc": "神奇九转当日入选",
+         "slow": True},
+        {"key": "custom", "label": "自定义代码", "desc": "手工输入代码",
+         "slow": False},
+    ]}
+
+
+class BollPoolReq(BaseModel):
+    source: str = "market"
+    codes: list[str] = []
+    exchange: Optional[str] = None
+    sectors: Optional[list[str]] = None
+
+
+@router.post("/api/bollfilter/pool")
+def bollfilter_pool(req: BollPoolReq):
+    """解析股票池来源 → 返回代码列表（供「数据过滤」页签直接取用）。
+
+    ★这是「把 BOLL 过滤器叠加到已有模块」的**零侵入**实现：
+      我们不往 beton / reverse9 的接口里塞参数，而是在这里**调用它们的 run()**
+      拿结果代码，再交给过滤器。已有模块一行都不用改。
+    """
+    src = req.source or "market"
+    pool, label, extra = [], src, {}
+    try:
+        if src == "custom":
+            pool = [str(c) for c in (req.codes or [])]
+        elif src == "market":
+            _d = conditions.DEFAULTS
+            pool, stats = conditions.load_universe(
+                _norm_exchange(req.exchange), req.sectors,
+                exclude_st=bool(_d.get("EXCLUDE_ST", True)),
+                new_stock_days=int(_d.get("NEW_STOCK_DAYS", 365)))
+            label = "全市场"
+            extra = {"stats": stats}
+        elif src in ("beton_main", "beton_watch"):
+            r = beton.run({}, _norm_exchange(req.exchange), req.sectors)
+            if src == "beton_main":
+                pool = [str(x["code"]) for x in (r.get("results") or [])]
+                label = "Bet on 主榜"
+            else:
+                pool = [str(x["code"]) for x in (r.get("watch") or [])]
+                label = "Bet on 观察榜"
+            extra = {"elapsed": r.get("elapsed"), "ref_date": r.get("ref_date")}
+        elif src == "reverse9":
+            r = reverse9.run({}, _norm_exchange(req.exchange), req.sectors)
+            pool = [str(x.get("code") or x.get("代码"))
+                    for x in (r.get("results") or [])]
+            label = "9Reverse9 入选"
+            extra = {"ref_date": r.get("ref_date")}
+        else:
+            return {"codes": [], "label": src, "hint": f"未知来源 {src}"}
+    except TaskCancelled:
+        return _cancelled_response()
+    except Exception as e:                     # noqa: BLE001
+        return {"codes": [], "label": label, "hint": f"取池失败：{type(e).__name__}: {e}"}
+    pool = [c for c in pool if c]
+    return {"codes": pool, "label": label, "n": len(pool),
+            "disclosure": ("Bet on 观察榜是宽松轨、**不是推荐**，且其分数对未来收益的 IC ≈ 0。"
+                           if src == "beton_watch" else None),
+            **extra}
+
+
+class BollFilterReq(BaseModel):
+    codes: list[str] = []            # 为空则对全市场跑（耗时较长）
+    filters: list[str] = []
+    state_filter: str = "any"        # any / bull / strong
+    min_bars: int = 120
+
+
+@router.post("/api/bollfilter/run")
+def bollfilter_run(req: BollFilterReq):
+    """对给定代码（或全市场）叠加 BOLL 过滤 + 大盘状态闸。"""
+    keys = [k for k in (req.filters or []) if k in bollfilter.FILTERS]
+    if not keys:
+        return {"rows": [], "hint": "未选择过滤器"}
+    codes = [str(c) for c in (req.codes or [])]
+    if not codes:
+        # 全市场：沿用 conditions 的股票池口径（同一个 load_universe，避免两套口径）
+        try:
+            _d = conditions.DEFAULTS
+            codes, _stats = conditions.load_universe(
+                None, None,
+                exclude_st=bool(_d.get("EXCLUDE_ST", True)),
+                new_stock_days=int(_d.get("NEW_STOCK_DAYS", 365)))
+        except Exception:
+            codes = []
+        if not codes:
+            return {"rows": [], "hint": "股票池为空"}
+    _task_start("BOLL 过滤")
+    try:
+        r = bollfilter.filter_codes(codes, keys,
+                                    state_filter=req.state_filter or "any",
+                                    min_bars=int(req.min_bars or 120),
+                                    progress_cb=_task_progress)
+        return {"rows": clean_records(r["rows"]),
+                "market": r["state"],
+                "n_in": r["n_in"], "n_out": r["n_out"],
+                "n_missing": r["n_missing"],
+                "skipped_state": r["skipped_state"],
+                "reason": r.get("reason"),
+                "note": "过滤器是「择时器」不是「增强器」：开启大盘门槛后胜率提升来自 beta，"
+                        "超额 alpha 实测为负，请勿理解为「信号被增强了」。"}
     except TaskCancelled:
         return _cancelled_response()
     finally:

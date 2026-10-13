@@ -149,6 +149,18 @@ def warmup_ak():
 
 
 # ========== 进度回调 ==========
+class SyncCancelled(Exception):
+    """用户请求停止同步时，在拉取链路上抛出的中断信号。
+
+    ⚠ 与普通 Exception 区分：`_call_ak` 的 `except Exception` 重试分支绝不能吞掉它
+    （否则「停止」后还会傻等 15s 超时 ×3 重试 = 45s 才退出）。"""
+
+
+# 同步专用取消闸门：**仅在 sync_all 执行期间非 None**（开始时创建、结束时清空）。
+# 这样 alert 等非同步流程偶发调用 fetch_spot/_call_ak 时不会被上一轮同步的残留取消信号误伤。
+_SYNC_CANCEL_EV: Optional[threading.Event] = None
+
+
 class _SyncState:
     def __init__(self):
         self.lock = threading.Lock()
@@ -162,6 +174,11 @@ class _SyncState:
     def request_cancel(self):
         with self.lock:
             self.cancel = True
+        # 同时拉响「同步专用闸门」：正在跑的拉取线程会在下一个检查点（≤0.2s）退出，
+        # 而不是傻等到 HTTP 超时/重试跑完。
+        ev = _SYNC_CANCEL_EV
+        if ev is not None:
+            ev.set()
 
     def cb(self, done: int, total: int, msg: str):
         with self.lock:
@@ -191,19 +208,46 @@ _AK_POOL = _cf.ThreadPoolExecutor(max_workers=24, thread_name_prefix="ak")
 
 
 def _call_ak(name: str, fn, retries: int = 2, timeout: int = 15, delay: float = 0.0):
-    """调用 akshare 接口，带真正的硬超时（超时后重试，避免网络卡死）。"""
+    """调用 akshare 接口，带真正的硬超时（超时后重试，避免网络卡死）。
+
+    【2026-10-12 停止同步修复】同步期间（_SYNC_CANCEL_EV 非 None）额外提供两个
+    中断点，让「停止同步」真正立即生效：
+      ① 每次重试前检查取消闸门 → 已停止则不再重试（否则单标的要等到 15s×3=45s）；
+      ② 等待结果时按 0.2s 分段轮询闸门 → 已停止则立刻放弃等待并抛 SyncCancelled。
+    底层 HTTP 请求本身无法强行掐断，但它会在后台自行超时结束，写入是幂等的
+    INSERT OR REPLACE，中途放弃不会破坏数据。"""
+    _ev = _SYNC_CANCEL_EV
     last = None
     for i in range(max(1, retries + 1)):
+        if _ev is not None and _ev.is_set():
+            raise SyncCancelled(f"{name}: 已停止（用户请求）")
         try:
             fut = _AK_POOL.submit(fn)
-            r = fut.result(timeout=timeout)  # 硬超时：超过 timeout 秒抛 TimeoutError
+            if _ev is None:
+                r = fut.result(timeout=timeout)      # 非同步路径：行为与旧版完全一致
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        r = fut.result(timeout=0.2)
+                        break
+                    except _cf.TimeoutError:
+                        if _ev.is_set():
+                            fut.cancel()
+                            raise SyncCancelled(f"{name}: 已停止（用户请求）")
+                        if time.monotonic() >= deadline:
+                            raise                       # → 落到下面超时分支重试/报错
             if delay:
                 time.sleep(delay)
             return r
+        except SyncCancelled:
+            raise                                       # ★ 取消：不重试、不吞
         except _cf.TimeoutError:
             last = TimeoutError(f"{name} 超时({timeout}s)")
         except Exception as e:
             last = e
+        if _ev is not None and _ev.is_set():
+            raise SyncCancelled(f"{name}: 已停止（用户请求）")
         time.sleep(min(2.0, 0.4 * (i + 1)))
     raise RuntimeError(f"{name}: {type(last).__name__}: {last}")
 
@@ -628,6 +672,10 @@ def _fetch_value_em_bulk(codes: list[str], start: Optional[str],
     all_rows: list[dict] = []
     page = 1
     while page <= 10:                       # 上限 10 页（5 万行）防失控
+        # ★ 停止同步检查点：本函数不走 _call_ak（直接用 _em_sess），必须自查，
+        #   否则「停止」后仍会把剩余分页全部拉完（实测全市场规模下约 12s）。
+        if _cancelled():
+            raise SyncCancelled("估值批量：已停止（用户请求）")
         params = {
             "sortColumns": "TRADE_DATE", "sortTypes": "-1",
             "pageSize": "5000", "pageNumber": str(page),
@@ -835,6 +883,8 @@ def _fetch_dividend_window(start: date, end: date, timeout: int = _FHPS_TIMEOUT,
                                         chunk=chunk)
     filt = (f"(EX_DIVIDEND_DATE>='{start.isoformat()}')"
             f"(EX_DIVIDEND_DATE<='{end.isoformat()}')")
+    if _cancelled():        # ★ 停止同步：首页请求也不再发出
+        return None
     try:
         pages, rows = _fhps_page(filt, 1, timeout)
     except Exception as e:  # noqa: BLE001
@@ -848,6 +898,8 @@ def _fetch_dividend_window(start: date, end: date, timeout: int = _FHPS_TIMEOUT,
         def _one(pn: int):
             last = None
             for attempt in range(_FHPS_PAGE_TRIES):
+                if _cancelled():          # ★ 停止同步：放弃剩余页（不重试）
+                    return pn, None
                 try:
                     return pn, _fhps_page(filt, pn, timeout)[1]
                 except Exception as e:  # noqa: BLE001
@@ -916,6 +968,8 @@ def _fetch_dividend_by_codes(start: date, end: date, codes: list,
     blocks = [codes[i:i + chunk] for i in range(0, len(codes), chunk)]
 
     def _block(bl: list):
+        if _cancelled():            # ★ 停止同步：未启动的块直接放弃（不进网络请求）
+            return None
         cs = '","'.join(bl)
         filt = (f"(EX_DIVIDEND_DATE>='{start.isoformat()}')"
                 f"(EX_DIVIDEND_DATE<='{end.isoformat()}')"
@@ -929,6 +983,8 @@ def _fetch_dividend_by_codes(start: date, end: date, codes: list,
         if pages > 1:
             def _one(pn: int):
                 for attempt in range(_FHPS_PAGE_TRIES):
+                    if _cancelled():      # ★ 停止同步：放弃剩余页（不重试）
+                        return None
                     try:
                         return _fhps_page(filt, pn, timeout)[1]
                     except Exception:  # noqa: BLE001
@@ -1093,6 +1149,8 @@ def _dividend_bulk_stage(conn, force: bool) -> tuple[Optional[dict], bool]:
       · 候选模式失败 → 自动回落全市场 → 再失败按报告期 → 最后才跳过本轮
         （**任何分支都不清空分红表**，只做 upsert 增量）。
     """
+    if _cancelled():          # ★ 停止同步：不再进入分红阶段（含不可中断的候选计算）
+        return None, False
     lb = _div_lookback_days(conn, force)
     STATE.cb(0, 1, f"分红：并发拉取近 {lb} 天除权除息…")
     # ---- 时点预测：决定本轮走「候选股模式」还是「全市场模式」----
@@ -1125,6 +1183,8 @@ def _dividend_bulk_stage(conn, force: bool) -> tuple[Optional[dict], bool]:
         _log.warning(f"分红时点预测不可用，回落全市场模式: {e}")
         cand_codes = None
 
+    if _cancelled():          # ★ 停止同步：候选计算已完成但用户已点停 → 不再发请求
+        return None, False
     res = None
     try:
         if cand_codes:
@@ -1144,6 +1204,9 @@ def _dividend_bulk_stage(conn, force: bool) -> tuple[Optional[dict], bool]:
     if res is not None and cand_codes is None:
         _log.warning(f"分红窗口仅覆盖 {len(res)} 只，判定异常，降级按报告期拉取")
     if cand_codes is not None:
+        if _cancelled():      # ★ 停止同步：不再做「全市场回落」（它要发 11 页请求）
+            _log.info("分红：已请求停止同步，放弃全市场回落")
+            return None, False
         # 候选模式失败：宁可回落全市场，也不能漏掉本周分红
         _log.warning("分红候选模式失败 → 回落全市场模式重试")
         try:
@@ -1153,6 +1216,9 @@ def _dividend_bulk_stage(conn, force: bool) -> tuple[Optional[dict], bool]:
             res = None
         if res is not None and len(res) >= 300:
             return res, True
+    if _cancelled():          # ★ 停止同步：不再做「按报告期」降级（28 请求 / 9s）
+        _log.info("分红：已请求停止同步，放弃按报告期降级")
+        return None, False
     try:
         res2 = _fetch_dividend_by_period(years=2)
     except Exception as e:  # noqa: BLE001
@@ -1175,6 +1241,12 @@ def _iso(d) -> str | None:
     except AttributeError:
         s = str(d)[:10]
         return s if re.match(r"^\d{4}-\d{2}-\d{2}$", s) else None
+
+
+def _cancelled() -> bool:
+    """是否已请求停止本轮同步（只有同步进行期间可能为 True）。"""
+    ev = _SYNC_CANCEL_EV
+    return bool(ev is not None and ev.is_set())
 
 
 def _sync_one(code: str, row: dict, kinds: tuple, wconn, counters: dict,
@@ -1245,6 +1317,8 @@ def _sync_one(code: str, row: dict, kinds: tuple, wconn, counters: dict,
             else:
                 counters["daily_skip"] += 1
 
+        if _cancelled():          # ★ 停止同步检查点（维度边界，≥0.2s 内生效）
+            return
         if "valuation" in kinds:
             last_v = last_valuation.get(code)
             # 注意 _iso(None) 返回 None；无估值历史的股票 last_v 为 None，
@@ -1284,6 +1358,8 @@ def _sync_one(code: str, row: dict, kinds: tuple, wconn, counters: dict,
                 else:
                     counters["val_fail"] += 1
 
+        if _cancelled():          # ★ 停止同步检查点（维度边界）
+            return
         if "dividend" in kinds:
             # 批量优先：一次覆盖全市场，本股零请求（bulk 未覆盖到=该期无分红）
             events = bulk_div.get(code, []) if bulk_div is not None \
@@ -1304,6 +1380,8 @@ def _sync_one(code: str, row: dict, kinds: tuple, wconn, counters: dict,
                     counters["div_none"] += 1
             else:
                 counters["div_none"] += 1
+    except SyncCancelled:
+        return                       # 用户停止：静默退出，不计入 errors（不是失败）
     except Exception as e:
         counters["err"] += 1
         counters.setdefault("errors", []).append(f"{code}: {e}")
@@ -1440,6 +1518,31 @@ def sync_all(
     max_workers: int = 12,
     div_authoritative: bool = False,
 ) -> dict:
+    """按范围增量同步（**带取消闸门生命周期管理**的入口）。
+
+    【2026-10-12 停止同步修复】取消闸门 `_SYNC_CANCEL_EV` 的语义是「本轮同步的
+    中断开关」：这里负责创建 / 销毁，`request_cancel()` 负责拉响。用 try/finally
+    保证**任何返回路径**（正常完成 / 被取消 / 异常 / 提前 return）都会清空闸门，
+    否则残留的 Event 会误伤之后 alert 等非同步流程对 fetch_spot/_call_ak 的调用。
+    """
+    global _SYNC_CANCEL_EV
+    _SYNC_CANCEL_EV = threading.Event()
+    try:
+        return _sync_all_impl(exchange=exchange, sectors=sectors, kinds=kinds,
+                              force=force, max_workers=max_workers,
+                              div_authoritative=div_authoritative)
+    finally:
+        _SYNC_CANCEL_EV = None
+
+
+def _sync_all_impl(
+    exchange: Optional[str] = None,
+    sectors: Optional[list] = None,
+    kinds: tuple = ("daily", "valuation", "dividend"),
+    force: bool = False,
+    max_workers: int = 12,
+    div_authoritative: bool = False,
+) -> dict:
     """按范围增量同步。
 
     force=True 时清空当前范围内 daily/valuation 后重拉。
@@ -1461,9 +1564,19 @@ def sync_all(
         STATE.cancel = False
 
     try:
+        # ★ 停止同步检查点（最早入口）：用户可能在「准备中…」就点了停止
+        if _cancelled():
+            STATE.status = "cancelled"
+            STATE.msg = "同步已停止"
+            return {"ok": True, "cancelled": True, "counters": {}}
         conn = db.writer()
         db.ensure_schema(conn)
         reset_em_kline_breaker()  # 新一轮同步重新给东财直连机会
+        # ★ 停止同步检查点（准备阶段入口）
+        if _cancelled():
+            STATE.status = "cancelled"
+            STATE.msg = "同步已停止"
+            return {"ok": True, "cancelled": True, "counters": {}}
         if exchange or sectors:
             codes = ranges.filter_meta_codes(exchange, sectors)
         else:
@@ -1523,13 +1636,24 @@ def sync_all(
         last_daily: dict = {}
         last_valuation: dict = {}
         if not force:
-            for c, d in conn.execute("SELECT code, MAX(date) FROM daily GROUP BY code"):
-                try:
-                    last_daily[c] = datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
-                except Exception:  # noqa: BLE001
-                    pass
-            for c, d in conn.execute("SELECT code, MAX(date) FROM valuation GROUP BY code"):
-                last_valuation[c] = d
+            # 按需扫描（2026-10-12）：valuation 表 950 万行，GROUP BY 实测 ~830ms，
+            # 在 kinds 不含该维度时纯属浪费，也拉长了「停止同步」的不可中断窗口。
+            if "daily" in run_kinds:
+                for c, d in conn.execute("SELECT code, MAX(date) FROM daily GROUP BY code"):
+                    try:
+                        last_daily[c] = datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+                    except Exception:  # noqa: BLE001
+                        pass
+                # ★ 停止同步检查点（两个重扫描之间）：单次 GROUP BY 不可中断，
+                #   拆开可把「取消后最多再等一次扫描」从 ~1s 降到 ~0.8s
+                if _cancelled():
+                    STATE.status = "cancelled"
+                    STATE.msg = "同步已停止"
+                    STATE.last_counters = counters
+                    return {"ok": True, "cancelled": True, "counters": counters}
+            if "valuation" in run_kinds:
+                for c, d in conn.execute("SELECT code, MAX(date) FROM valuation GROUP BY code"):
+                    last_valuation[c] = d
         # div_known 恒加载（含 force）：分红表永不清空，过滤掉本地已有事件即可
         # 保证「只增不删」，同时避免同 (code, ex_date) 被源端不同口径覆盖（反向更新）。
         div_known: set = set()
@@ -1551,6 +1675,12 @@ def sync_all(
                 if not div_ran:
                     run_kinds = tuple(k for k in run_kinds if k != "dividend")
                     STATE.cb(0, total, "分红批量不可用，本轮跳过分红（下轮自动重试）")
+        # ★ 停止同步检查点（分红批量阶段之后）：分红分页最长 ~2.5s，取消后不再继续
+        if _cancelled():
+            STATE.status = "cancelled"
+            STATE.msg = "同步已停止"
+            STATE.last_counters = counters
+            return {"ok": True, "cancelled": True, "counters": counters}
 
         # ---- 估值：批量预取（东财 datacenter-web 支持 SECURITY_CODE in (...)）----
         # 实测（2026-09-07，100/300 只随机样本）：
@@ -1582,6 +1712,8 @@ def sync_all(
                     _vlock = threading.Lock()
 
                     def _val_chunk(ch):
+                        if _cancelled():      # ★ 取消后不再发起新的批量请求（快速排空队列）
+                            return 0
                         st = min(x[1] for x in ch).strftime("%Y-%m-%d")
                         try:
                             d = _fetch_value_em_bulk([x[0] for x in ch], st, 25)
@@ -1603,6 +1735,12 @@ def sync_all(
                 _log.warning(f"估值批量预取异常，全部退回逐股: {e}")
                 bulk_val = None
 
+        # ★ 停止同步检查点（估值批量阶段之后）：估值批量是准备阶段最重的一步
+        if _cancelled():
+            STATE.status = "cancelled"
+            STATE.msg = "同步已停止"
+            STATE.last_counters = counters
+            return {"ok": True, "cancelled": True, "counters": counters}
         STATE.cb(0, total, f"数据同步：{'全量' if force else '增量'}，"
                             f"范围 {exchange or 'ALL'}，{total} 只"
                             f"{'（分红批量）' if bulk_div is not None else ''}"
@@ -1617,17 +1755,29 @@ def sync_all(
                                  bulk_div, bulk_val): r["code"]
                        for r in rows}
             done = 0
-            for fut in as_completed(futures):
+            # 【2026-10-12 停止同步修复】原实现直接 `for fut in as_completed(futures)`：
+            # as_completed 是**阻塞**的，必须等「下一个任务完成」才轮到循环体检查
+            # STATE.cancel —— 单个任务最长 15s 超时 ×3 重试 ≈ 45s，于是「停止同步」
+            # 要等几十秒才生效。改为 0.25s 超时的轮询：取消请求最多 0.25s 被主循环看到，
+            # 随即 break 并取消队列中尚未启动的任务（已在跑的少数任务由 _sync_one /
+            # _call_ak 内的检查点在下一个维度边界/轮询窗口自行退出）。
+            pending = set(futures)
+            reported = 0
+            while pending:
                 if STATE.cancel:
                     cancelled = True
                     break
-                done += 1
-                if done % 5 == 0 or done == total:
-                    STATE.cb(done, total,
-                             f"数据同步 {done}/{total} | "
-                             f"日K+{counters['daily_new']} 估值+{counters['val_new']}")
+                done_now, pending = _cf.wait(pending, timeout=0.25,
+                                             return_when=_cf.FIRST_COMPLETED)
+                if done_now:
+                    done += len(done_now)
+                    if done - reported >= 5 or done == total:
+                        reported = done
+                        STATE.cb(done, total,
+                                 f"数据同步 {done}/{total} | "
+                                 f"日K+{counters['daily_new']} 估值+{counters['val_new']}")
         finally:
-            # 停止：立即返回，取消尚未执行的 future；已运行中的少数任务继续跑完
+            # 停止：立即返回，取消尚未执行的 future；已运行中的少数任务会尽快自行退出
             # （写入为 INSERT OR REPLACE 幂等，不破坏数据）
             ex.shutdown(wait=False, cancel_futures=True)
         if cancelled:

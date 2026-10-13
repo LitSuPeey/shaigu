@@ -2,6 +2,85 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+// 绘图取色：读 CSS 变量（带缓存；切主题时 TVclear()）。
+// 无头/极端环境下 getComputedStyle 不可用时回退到 fallback 原值。
+const _tvCache = {};
+function TV(name, fallback) {
+  if (!Object.prototype.hasOwnProperty.call(_tvCache, name)) {
+    let v = '';
+    try {
+      if (typeof getComputedStyle === 'function') {
+        v = (getComputedStyle(document.documentElement).getPropertyValue(name) || '').trim();
+      }
+    } catch (e) { v = ''; }
+    _tvCache[name] = v || fallback || '';
+  }
+  return _tvCache[name];
+}
+function TVclear() { for (const k in _tvCache) delete _tvCache[k]; }
+
+// ========= 外观主题（5 套，localStorage 记忆） =========
+// 各图表模块可在 window.__themeRedraw 里注册重绘回调（切换主题后自动刷新）
+window.__themeRedraw = window.__themeRedraw || [];
+// 主题登记表：id 必须是 data-theme 的白名单（head 内联脚本 / setTheme 双处校验）
+const THEMES = [
+  { id: 'dark',  label: '暗色',  icon: '🌙', desc: '罗德岛终端', sw: ['#171b23', '#f0c14b'] },
+  { id: 'light', label: '亮色',  icon: '📜', desc: '羊皮纸',     sw: ['#f5f3ef', '#b86b3f'] },
+  { id: 'pink',  label: '粉色',  icon: '🌸', desc: '樱花',       sw: ['#fdf4f7', '#d4577a'] },
+  { id: 'blue',  label: '蓝色',  icon: '🌊', desc: '静谧',       sw: ['#f1f6fc', '#3b6fd4'] },
+  { id: 'beige', label: '米色',  icon: '🌾', desc: '燕麦',       sw: ['#f7f4ec', '#a3823f'] },
+];
+const THEME_IDS = THEMES.map(t => t.id);
+function themeDef(id) { return THEMES.find(t => t.id === id) || THEMES[0]; }
+function currentTheme() {
+  const t = document.documentElement.getAttribute('data-theme');
+  return THEME_IDS.indexOf(t) >= 0 ? t : 'dark';
+}
+function setTheme(t) {
+  const id = THEME_IDS.indexOf(t) >= 0 ? t : 'dark';   // 白名单：非法值一律回落到暗色
+  document.documentElement.setAttribute('data-theme', id);
+  try { localStorage.setItem('shaigu.theme', id); } catch (e) { }
+  // 顶栏按钮文案跟随当前外观
+  const b = $('#btnTheme');
+  if (b) {
+    const d = themeDef(id);
+    b.textContent = d.icon + ' ' + d.label;
+    b.title = '外观：' + d.label + '（' + d.desc + '）· 点击切换';
+  }
+  // 外观面板里的选中态
+  $$('.theme-item').forEach(el => el.classList.toggle('active', el.dataset.theme === id));
+  TVclear();
+  // K 线模块单独通知（不依赖注册表也生效），再跑注册表
+  try { if (window.KlineView && window.KlineView.themeChanged) window.KlineView.themeChanged(); } catch (e) { }
+  window.__themeRedraw.forEach(f => { try { f(); } catch (e) { } });
+}
+/* 外观面板开关（点击按钮弹出，点外部 / Esc 关闭） */
+function toggleThemePop(force) {
+  const pop = $('#themePop');
+  if (!pop) return;
+  const show = force == null ? pop.hidden : !!force;
+  pop.hidden = !show;
+  const b = $('#btnTheme');
+  if (b) b.classList.toggle('open', show);
+}
+function bindThemeUI() {
+  const b = $('#btnTheme');
+  if (b) b.addEventListener('click', e => { e.stopPropagation(); toggleThemePop(); });
+  $$('.theme-item').forEach(el => {
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      setTheme(el.dataset.theme);
+      toggleThemePop(false);
+    });
+  });
+  document.addEventListener('click', e => {
+    const pop = $('#themePop');
+    if (pop && !pop.hidden && !pop.contains(e.target)) toggleThemePop(false);
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') toggleThemePop(false); });
+  setTheme(currentTheme());   // 初始化按钮文案 / 面板选中态
+}
+
 
 // 表单数值读取（缺省兜底）
 function num(sel, dflt) {
@@ -1213,7 +1292,7 @@ function renderR9(data) {
     const conds = [];
     if (Number(p.near_remaining) > 0) conds.push(`即将 还差 ≤ <b>${p.near_remaining}</b> 个周期`);
     if (p.include_triggered) conds.push(`含<b>当天达成</b>`);
-    if ((p.after_days || []).length) conds.push(`含<b>已达成后 ${p.after_days.join('/')}</b> 个周期`);
+    if ((p.after_days || []).length) conds.push(`含<b>已达成后 ${p.after_days.join('/')}</b> 个交易日（日线）`);
     const forced = p.forced_near
       ? ` · <b class="r9-warn">三个维度全未启用 → 已自动开启「即将」</b>` : '';
     sum.hidden = false;
@@ -1373,8 +1452,9 @@ function downloadR9Csv() {
       (Number((d.params || {}).near_remaining) > 0 ? '即将还差≤' + d.params.near_remaining + '个周期 ' : '')
       + ((d.params || {}).include_triggered ? '+ 当天达成 ' : '')
       + (((d.params || {}).after_days || []).length
-          ? '+ 已达成后 ' + d.params.after_days.join('/') + ' 个周期' : '')],
-    ['口径', '维度口径', '「已达成后 x」= 信号日之后第 x 个周期（不含信号当天）；只认恰好过了 x 个，已过 4 个而只选 1/2/3 时不入选'],
+          ? '+ 已达成后 ' + d.params.after_days.join('/') + ' 个交易日（日线）' : '')],
+    ['口径', '维度口径', '「已达成后 x」= 信号日之后第 x 个**交易日**（不含信号当天，固定日线口径，不受周期选择影响）；只认恰好过了 x 个，已过 4 个而只选 1/2/3 时不入选'],
+    ['口径', '周期作用范围', '周期（日/周/月）选择只影响 ①「还剩 xxx」与 ②「当天达成」；③「已达成后 x」始终按日线判定（勾选③时日线自动加入筛选）'],
     ['口径', '排序规则', (d.stats || {}).use_dim_bucket
       ? '先按维度分档（当天九转 > 即将 > 已过九转），档内再按排序分升序'
       : '单维度，直接按排序分升序'],
@@ -1942,12 +2022,12 @@ async function loadBetonChart(code, holder, btn) {
 function drawBetonChart(cv, d) {
   const { ctx, W, H } = hiDPI(cv, 2);
   const series = [
-    { key: 'close', data: d.close || [], color: '#b86b3f', w: 1.8, label: '月线收盘' },
-    { key: 'ma120', data: d.ma120 || [], color: '#5b7c9d', w: 1.1, label: 'MA120' },
-    { key: 'ma250', data: d.ma250 || [], color: '#8a8a8a', w: 1.1, label: 'MA250' },
+    { key: 'close', data: d.close || [], color: TV('--accent', '#b86b3f'), w: 1.8, label: '月线收盘' },
+    { key: 'ma120', data: d.ma120 || [], color: TV('--blue', '#5b7c9d'), w: 1.1, label: 'MA120' },
+    { key: 'ma250', data: d.ma250 || [], color: TV('--ink-faint', '#8a8a8a'), w: 1.1, label: 'MA250' },
   ];
   const n = (d.dates || []).length;
-  if (n < 2) { ctx.fillStyle = '#a3a3a3'; ctx.fillText('数据不足', 12, 20); return; }
+  if (n < 2) { ctx.fillStyle = TV('--ink-faint', '#a3a3a3'); ctx.fillText('数据不足', 12, 20); return; }
   const vals = [];
   series.forEach(s => s.data.forEach(v => { if (Number.isFinite(v) && v > 0) vals.push(v); }));
   let lo = Math.min(...vals), hi = Math.max(...vals);
@@ -1959,7 +2039,7 @@ function drawBetonChart(cv, d) {
   const X = i => L + (i / (n - 1)) * pw;
   const Y = v => T + ph - ((v - lo) / (hi - lo)) * ph;
 
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = TV('--bg-card', '#ffffff');
   ctx.fillRect(0, 0, W, H);
 
   // 历史上涨段背景带（绿色）/ 进行中的段（橙色）
@@ -1972,13 +2052,13 @@ function drawBetonChart(cv, d) {
   });
   if (d.cur) {
     const x0 = X(Math.max(0, Math.min(n - 1, d.cur.i0 / step)));
-    ctx.fillStyle = 'rgba(184,107,63,0.16)';
+    ctx.fillStyle = 'rgba(' + TV('--accent-rgb', '184,107,63') + ',0.16)';
     ctx.fillRect(Math.min(x0, X(n - 1)), T, Math.max(1.5, Math.abs(X(n - 1) - x0)), ph);
   }
 
   // 网格 + Y 轴刻度
-  ctx.strokeStyle = '#eeebe2'; ctx.lineWidth = 1;
-  ctx.font = '10px sans-serif'; ctx.fillStyle = '#a3a3a3'; ctx.textAlign = 'right';
+  ctx.strokeStyle = TV('--line-soft', '#eeebe2'); ctx.lineWidth = 1;
+  ctx.font = '10px sans-serif'; ctx.fillStyle = TV('--ink-faint', '#a3a3a3'); ctx.textAlign = 'right';
   for (let k = 0; k <= 3; k++) {
     const v = lo + (hi - lo) * k / 3, y = Y(v);
     ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(W - R, y); ctx.stroke();
@@ -2009,7 +2089,7 @@ function drawBetonChart(cv, d) {
   series.forEach(s => {
     ctx.fillStyle = s.color;
     ctx.fillRect(lx, T + 2, 10, 2.5);
-    ctx.fillStyle = '#6b6b6b';
+    ctx.fillStyle = TV('--ink-soft', '#6b6b6b');
     ctx.fillText(s.label, lx + 13, T + 6.5);
     lx += 13 + ctx.measureText(s.label).width + 14;
   });
@@ -2440,22 +2520,22 @@ function drawHistChart(d) {
   const dateIdx = {};
   months.forEach((m, i) => { dateIdx[m.date] = i; });
   // —— 标题 ——
-  ctx.fillStyle = '#2a2a2a';
+  ctx.fillStyle = TV('--ink', '#2a2a2a');
   ctx.font = '600 13px sans-serif';
   const cyc = d.cycles || [];
   ctx.fillText(`${d.code} ${d.name} · 月线（对数轴） · 窗口 ${d.years} 年 · 完整循环 ${cyc.length} 次`, PAD_L, 18);
   // —— 网格（对数均匀 5 条）——
-  ctx.strokeStyle = '#eeebe2'; ctx.lineWidth = 1;
+  ctx.strokeStyle = TV('--line-soft', '#eeebe2'); ctx.lineWidth = 1;
   ctx.font = '10px sans-serif';
   for (let i = 0; i <= 4; i++) {
     const lv = logMin + (logMax - logMin) * i / 4;
     const y = yMap(Math.exp(lv));
     ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
-    ctx.fillStyle = '#a3a3a3';
+    ctx.fillStyle = TV('--ink-faint', '#a3a3a3');
     ctx.fillText(Math.exp(lv) >= 100 ? Math.exp(lv).toFixed(0) : Math.exp(lv).toFixed(2), 6, y + 3);
   }
   // —— 时间轴标签（约每 1/8 宽度一个年）——
-  ctx.fillStyle = '#a3a3a3';
+  ctx.fillStyle = TV('--ink-faint', '#a3a3a3');
   const labelStep = Math.max(1, Math.ceil(N / 8));
   months.forEach((m, i) => {
     if (i % labelStep === 0 || i === N - 1) {
@@ -2465,7 +2545,7 @@ function drawHistChart(d) {
   // —— 指数对比线（归一化到股票起点价，灰色虚线）——
   if (idxs.length >= 2) {
     const baseIdx = idxs[0].v, baseStk = closes[dateIdx[idxs[0].date]] || closes[0];
-    ctx.strokeStyle = '#b9b3a4'; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = TV('--ink-faint', '#b9b3a4'); ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
     ctx.beginPath();
     let started = false;
     idxs.forEach(p => {
@@ -2478,7 +2558,7 @@ function drawHistChart(d) {
     ctx.stroke(); ctx.setLineDash([]);
   }
   // —— 股票收盘折线 ——
-  ctx.strokeStyle = '#b86b3f'; ctx.lineWidth = 1.6;
+  ctx.strokeStyle = TV('--accent', '#b86b3f'); ctx.lineWidth = 1.6;
   ctx.beginPath();
   months.forEach((m, i) => {
     if (i === 0) ctx.moveTo(xAt(i), yMap(m.close));
@@ -2499,10 +2579,10 @@ function drawHistChart(d) {
     const x = xAt(i), y = yMap(p.price);
     ctx.beginPath();
     if (p.kind === 'H') {           // 顶：红色倒三角
-      ctx.fillStyle = '#c0392b';
+      ctx.fillStyle = TV('--good', '#c0392b');
       ctx.moveTo(x, y - 5); ctx.lineTo(x - 4.5, y - 13); ctx.lineTo(x + 4.5, y - 13);
     } else {                         // 底：绿色正三角
-      ctx.fillStyle = '#2e8b57';
+      ctx.fillStyle = TV('--bad', '#2e8b57');
       ctx.moveTo(x, y + 5); ctx.lineTo(x - 4.5, y + 13); ctx.lineTo(x + 4.5, y + 13);
     }
     ctx.closePath(); ctx.fill();
@@ -2516,20 +2596,20 @@ function drawHistChart(d) {
     if (!p) return;
     const x = xAt(i), y = yMap(p.price);
     const yBase = Math.min(y + 30, H - PAD_B + 24);
-    ctx.fillStyle = '#2e8b57';
+    ctx.fillStyle = TV('--bad', '#2e8b57');
     ctx.fillText(`↓${c.dd}%`, x - 12, yBase);
-    ctx.fillStyle = '#c0392b';
+    ctx.fillStyle = TV('--good', '#c0392b');
     ctx.fillText(`↑${c.up}%`, x - 12, yBase + 12);
   });
   // —— 图例 ——
   ctx.font = '10.5px sans-serif';
-  ctx.fillStyle = '#b86b3f';
+  ctx.fillStyle = TV('--accent', '#b86b3f');
   ctx.fillText('—— 月收盘价', W - 300, 18);
-  ctx.fillStyle = '#b9b3a4';
+  ctx.fillStyle = TV('--ink-faint', '#b9b3a4');
   ctx.fillText('---- 上证指数（归一化）', W - 225, 18);
-  ctx.fillStyle = '#c0392b';
+  ctx.fillStyle = TV('--good', '#c0392b');
   ctx.fillText('▲顶', W - 90, 18);
-  ctx.fillStyle = '#2e8b57';
+  ctx.fillStyle = TV('--bad', '#2e8b57');
   ctx.fillText('▼底', W - 60, 18);
 }
 
@@ -2591,7 +2671,7 @@ function drawSimilarChart(target, candidates) {
   if (candidates.length > 0 && candidates[0].chart) {
     const t0 = candidates[0].chart;
     const tVals = Array.isArray(t0.target) ? t0.target : (Array.isArray(t0.cand) ? t0.cand : null);
-    if (tVals) series.push({ name: `目标 ${target.code} ${target.name || ''}`, vals: tVals, color: '#ff2d2d', width: 3, dash: [] });   // 目标股：鲜亮红
+    if (tVals) series.push({ name: `目标 ${target.code} ${target.name || ''}`, vals: tVals, color: TV('--good', '#ff2d2d'), width: 3, dash: [] });   // 目标股：鲜亮红
     // a 蓝 / b 橙 / c 绿 —— 高区分度且柔和不刺眼；类内第 1 只实线、第 2 只虚线
     const palette = { a: '#1f6fd0', b: '#e8890c', c: '#18a47c' };
     candidates.forEach(cd => {
@@ -2601,7 +2681,7 @@ function drawSimilarChart(target, candidates) {
     });
   }
   if (series.length === 0) {
-    ctx.fillStyle = '#a3a3a3'; ctx.font = '13px sans-serif';
+    ctx.fillStyle = TV('--ink-faint', '#a3a3a3'); ctx.font = '13px sans-serif';
     ctx.fillText('暂无对比数据：请先运行匹配', PAD, PAD);
     return;
   }
@@ -2611,11 +2691,11 @@ function drawSimilarChart(target, candidates) {
   const pad = (mx - mn) * 0.08 || 1;
   mn -= pad; mx += pad;
   const yMap = v => H - PAD - ((v - mn) / (mx - mn)) * (H - PAD * 2);
-  ctx.strokeStyle = '#eeebe2'; ctx.lineWidth = 1;
+  ctx.strokeStyle = TV('--line-soft', '#eeebe2'); ctx.lineWidth = 1;
   for (let i = 0; i < 5; i++) {
     const y = PAD + (H - PAD * 2) * (i / 4);
     ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
-    ctx.fillStyle = '#a3a3a3'; ctx.font = '10px sans-serif';
+    ctx.fillStyle = TV('--ink-faint', '#a3a3a3'); ctx.font = '10px sans-serif';
     ctx.fillText((mx - (mx - mn) * i / 4).toFixed(1), 6, y + 3);
   }
   series.forEach(s => {
@@ -2656,6 +2736,7 @@ async function runAlert() {
   [['alertSecCalendar', 'calendar'], ['alertSecStealth', 'stealth'], ['alertSecCold', 'cold'],
    ['alertSecNational', 'national'], ['alertSecForeign', 'foreign'],
    ['alertSecCrowding', 'crowding'], ['alertSecChains', 'chains'],
+   ['alertSecMacro', 'macro'],
    ['alertSecSpecial', 'special']]
     .forEach(([id, key]) => { const el = $('#' + id); if (el && el.checked) sections.push(key); });
   if (sections.length === 0) {
@@ -2846,7 +2927,7 @@ function renderAlert(data) {
 // ========= 前瞻预警：点击结果卡片标题 = 选入/踢出该模块（与上方勾选框联动） =========
 const SEC_CHECKBOX = { calendar: 'alertSecCalendar', stealth: 'alertSecStealth', cold: 'alertSecCold',
   national: 'alertSecNational', foreign: 'alertSecForeign', crowding: 'alertSecCrowding',
-  chains: 'alertSecChains', special: 'alertSecSpecial' };
+  chains: 'alertSecChains', macro: 'alertSecMacro', special: 'alertSecSpecial' };
 function refreshSecToggleState() {
   $$('.sec-toggle').forEach(h => {
     const cb = $('#' + (SEC_CHECKBOX[h.dataset.sec] || ''));
@@ -2908,14 +2989,29 @@ function hiDPI(canvas, scale = 2) {
 }
 
 // 点击图表 → 新窗口打开高清大图（可另存）
+// 导出时先合成一层主题背景色：canvas 是透明的，暗色主题下线条是浅色，
+// 直接导出透明 PNG 在白色看图器里会「看不见」。
 function openChartWindow(canvas, title) {
-  const img = canvas.toDataURL('image/png');
+  const cs = getComputedStyle(document.documentElement);
+  const bg = (cs.getPropertyValue('--bg-card') || '').trim() || '#ffffff';
+  const ink = (cs.getPropertyValue('--ink-soft') || '').trim() || '#8a8578';
+  let img;
+  try {
+    const off = document.createElement('canvas');
+    off.width = canvas.width; off.height = canvas.height;
+    const octx = off.getContext('2d');
+    octx.fillStyle = bg; octx.fillRect(0, 0, off.width, off.height);
+    octx.drawImage(canvas, 0, 0);
+    img = off.toDataURL('image/png');
+  } catch (e) {
+    img = canvas.toDataURL('image/png');   // 兜底：合成失败直接用原图
+  }
   const w = window.open('', '_blank');
   if (!w) { showOverlay('error', '新窗口被浏览器拦截，请允许弹窗后重试'); setTimeout(hideOverlay, 2500); return; }
   w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + title + '</title>' +
-    '<style>body{margin:0;background:#faf8f3;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:12px}' +
-    'img{max-width:97vw;max-height:90vh;box-shadow:0 10px 34px rgba(60,40,20,.18);border-radius:10px;background:#fff;cursor:zoom-out}' +
-    'p{font:13px/1.6 sans-serif;color:#8a8578;margin:0}</style></head>' +
+    '<style>body{margin:0;background:' + bg + ';display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:12px}' +
+    'img{max-width:97vw;max-height:90vh;box-shadow:0 10px 34px rgba(0,0,0,.18);border-radius:10px;background:' + bg + ';cursor:zoom-out}' +
+    'p{font:13px/1.6 sans-serif;color:' + ink + ';margin:0}</style></head>' +
     '<body><img src="' + img + '" title="点击另存为 PNG" ' +
     'onclick="const a=document.createElement(\'a\');a.href=this.src;a.download=\'' + title + '.png\';a.click()"/>' +
     '<p>' + title + ' · 高清图 · 点击图片可另存</p></body></html>');
@@ -3071,20 +3167,20 @@ function drawCycleChart(data) {
   const xStep = (W - PAD * 2) / TOT;
   const yMap = v => H - PAD - ((v - mn) / (mx - mn)) * (H - PAD * 2);
   const xAt = i => PAD + i * xStep + xStep / 2;
-  ctx.strokeStyle = '#eeebe2'; ctx.lineWidth = 1; ctx.font = '10px sans-serif';
+  ctx.strokeStyle = TV('--line-soft', '#eeebe2'); ctx.lineWidth = 1; ctx.font = '10px sans-serif';
   for (let i = 0; i <= 4; i++) {
     const y = PAD + (H - PAD * 2) * (i / 4);
     ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
-    ctx.fillStyle = '#a3a3a3';
+    ctx.fillStyle = TV('--ink-faint', '#a3a3a3');
     ctx.fillText((mx - (mx - mn) * i / 4).toFixed(0), 8, y + 3);
   }
   // 预测起点竖虚线
   const fStart = rows[N - 1];
   if (F > 0) {
-    ctx.strokeStyle = '#b8860b'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+    ctx.strokeStyle = TV('--accent-deep', '#b8860b'); ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(xAt(N - 1), PAD); ctx.lineTo(xAt(N - 1), H - PAD); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = '#b8860b'; ctx.fillText('预测起点 →', xAt(N - 1) + 4, PAD + 10);
+    ctx.fillStyle = TV('--accent-deep', '#b8860b'); ctx.fillText('预测起点 →', xAt(N - 1) + 4, PAD + 10);
   }
   // 通道带填充：历史（较深）+ 预测（更浅）
   const i0 = rows.findIndex(r => r.upper != null);
@@ -3118,9 +3214,9 @@ function drawCycleChart(data) {
     });
     ctx.stroke(); ctx.setLineDash([]);
   };
-  line('upper', '#c0392b', 1.4, [6, 4]);
-  line('mid', '#8a8a8a', 1, [2, 3]);
-  line('lower', '#2e8b57', 1.4, [6, 4]);
+  line('upper', TV('--good', '#c0392b'), 1.4, [6, 4]);
+  line('mid', TV('--ink-faint', '#8a8a8a'), 1, [2, 3]);
+  line('lower', TV('--bad', '#2e8b57'), 1.4, [6, 4]);
   // 预测轨道（虚线延伸：从最后历史点连到各预测点）
   if (F > 0) {
     const fline = (key, color, width) => {
@@ -3130,12 +3226,12 @@ function drawCycleChart(data) {
       fc.forEach((p, k) => ctx.lineTo(xAt(N + k), yMap(p[key])));
       ctx.stroke(); ctx.setLineDash([]);
     };
-    fline('upper', '#c0392b', 1.3);
-    fline('mid', '#8a8a8a', 1);
-    fline('lower', '#2e8b57', 1.3);
+    fline('upper', TV('--good', '#c0392b'), 1.3);
+    fline('mid', TV('--ink-faint', '#8a8a8a'), 1);
+    fline('lower', TV('--bad', '#2e8b57'), 1.3);
     // 预测终点标注
     const fe = fc[F - 1];
-    ctx.fillStyle = '#b8860b'; ctx.font = 'bold 11px sans-serif';
+    ctx.fillStyle = TV('--accent-deep', '#b8860b'); ctx.font = 'bold 11px sans-serif';
     ctx.fillText(`外推 ${fe.date} 中轨 ${fe.mid}`, Math.min(xAt(TOT - 1) - 60, W - PAD - 130), yMap(fe.mid) - 8);
   }
   // 历史月K（涨红跌绿）
@@ -3143,8 +3239,8 @@ function drawCycleChart(data) {
   rows.forEach((r, i) => {
     if (r.open == null || r.close == null) return;
     const up = r.close >= r.open;
-    ctx.strokeStyle = up ? '#d23f31' : '#1d9a6c';
-    ctx.fillStyle = up ? '#d23f31' : '#1d9a6c';
+    ctx.strokeStyle = up ? TV('--good', '#d23f31') : TV('--bad', '#1d9a6c');
+    ctx.fillStyle = up ? TV('--good', '#d23f31') : TV('--bad', '#1d9a6c');
     const x = xAt(i);
     if (r.high != null && r.low != null) {
       ctx.beginPath(); ctx.moveTo(x, yMap(r.high)); ctx.lineTo(x, yMap(r.low)); ctx.lineWidth = 1; ctx.stroke();
@@ -3154,7 +3250,7 @@ function drawCycleChart(data) {
     ctx.fillRect(x - bw / 2, top, bw, hgt);
   });
   // X 轴年份标注（历史 + 预测区）
-  ctx.fillStyle = '#a3a3a3'; ctx.font = '10px sans-serif';
+  ctx.fillStyle = TV('--ink-faint', '#a3a3a3'); ctx.font = '10px sans-serif';
   rows.forEach((r, i) => {
     const yr = (r.date || '').slice(0, 4);
     const prev = i ? (rows[i - 1].date || '').slice(0, 4) : '';
@@ -3167,15 +3263,15 @@ function drawCycleChart(data) {
   });
   // 图例 + 最新点
   ctx.font = '10.5px sans-serif';
-  ctx.fillStyle = '#c0392b'; ctx.fillText('— 上轨', W - PAD - 200, 16);
-  ctx.fillStyle = '#8a8a8a'; ctx.fillText('— 中轨', W - PAD - 150, 16);
-  ctx.fillStyle = '#2e8b57'; ctx.fillText('— 下轨', W - PAD - 100, 16);
+  ctx.fillStyle = TV('--good', '#c0392b'); ctx.fillText('— 上轨', W - PAD - 200, 16);
+  ctx.fillStyle = TV('--ink-faint', '#8a8a8a'); ctx.fillText('— 中轨', W - PAD - 150, 16);
+  ctx.fillStyle = TV('--bad', '#2e8b57'); ctx.fillText('— 下轨', W - PAD - 100, 16);
   const lastRow = rows[N - 1];
   ctx.beginPath(); ctx.arc(xAt(N - 1), yMap(lastRow.close), 3.2, 0, Math.PI * 2);
-  ctx.fillStyle = '#b86b3f'; ctx.fill();
-  ctx.fillStyle = '#2a2a2a'; ctx.font = 'bold 13px sans-serif';
+  ctx.fillStyle = TV('--accent', '#b86b3f'); ctx.fill();
+  ctx.fillStyle = TV('--ink', '#2a2a2a'); ctx.font = 'bold 13px sans-serif';
   ctx.fillText(`${data.source_label || ''} · ${N} 个月`, PAD, 18);
-  ctx.fillStyle = '#6b6b6b'; ctx.font = '11px sans-serif';
+  ctx.fillStyle = TV('--ink-soft', '#6b6b6b'); ctx.font = '11px sans-serif';
   ctx.fillText(`最新 ${lastRow.close} (${lastRow.date}) ｜ 通道位置 ${(data.metrics || {}).position_pct}%`, PAD, H - 10);
 }
 
@@ -3261,7 +3357,7 @@ function drawSpark(canvas, vals) {
   // 折线
   ctx.beginPath();
   vals.forEach((v, i) => i ? ctx.lineTo(xAt(i), yAt(v)) : ctx.moveTo(xAt(i), yAt(v)));
-  ctx.strokeStyle = up ? '#d23f31' : '#1d9a6c';
+  ctx.strokeStyle = up ? TV('--good', '#d23f31') : TV('--bad', '#1d9a6c');
   ctx.lineWidth = 1.6; ctx.stroke();
 }
 
@@ -3406,95 +3502,41 @@ function exportFuturesCsv() {
 }
 
 // ========= K 线 =========
-async function loadKline() {
-  const code = $('#klineCode').value.trim();
-  if (!code) { showMeme('klineMeme', 'ask', '请输入代码', '例如 600519 / 000001'); return; }
-  showOverlay('loading', '正在加载 K 线…');
-  const data = await API.kline(code, Number($('#klineDays').value));
-  hideOverlay();
-  if (!data.bars || data.bars.length === 0) {
-    showMeme('klineMeme', 'error', '没有 K 线数据', data.error || '请检查代码');
-    return;
-  }
-  hideMeme('klineMeme');
-  drawKlineCanvas(data.bars, data.code, data.display_days);
-  $('#klineLink').href = thsLink(data.code);
+// 渲染与交互已迁移到独立模块 kline.js（window.KlineView）：
+// 十字光标 / 成交量副图 / 滚轮缩放 / 拖拽平移 / MA 开关 / 指数支持。
+// 保留 loadKline 作为统一入口（结果表代码列点击、按钮、回车都走这里）。
+function loadKline() {
+  if (window.KlineView && window.KlineView.load) return window.KlineView.load();
+  showMeme('klineMeme', 'error', 'K 线模块未加载', '请按 Ctrl+F5 强制刷新页面');
 }
-function drawKlineCanvas(bars, code, displayDays) {
-  // bars 含后端多取的 60 根均线预热段；K 线只显示最后 displayDays 根，
-  // MA 用全量数据计算后对齐显示窗口 → 显示区间内 MA5/10/20/60 全程可画
-  const dd = Math.min(displayDays || bars.length, bars.length);
-  const view = bars.slice(-dd);          // 显示窗口
-  const v0 = bars.length - view.length;  // 预热段偏移
-  const canvas = $('#klineChart');
-  const { ctx, W, H } = hiDPI(canvas);   // 2x 超采样高清
-  const PAD = 50;
-  ctx.clearRect(0, 0, W, H);
-  const N = view.length;
-  let mn = Math.min(...view.map(k => k.low)), mx = Math.max(...view.map(k => k.high));
-  const ma = n => bars.map((_, i) => i < n - 1 ? null :
-    bars.slice(i - n + 1, i + 1).reduce((s, b) => s + b.close, 0) / n);
-  const maArrs = [ma(5), ma(10), ma(20), ma(60)];
-  maArrs.forEach(arr => arr.slice(v0).forEach(v => {
-    if (v != null && Number.isFinite(v)) { mn = Math.min(mn, v); mx = Math.max(mx, v); }
-  }));
-  const pad = (mx - mn) * 0.06 || 1; mn -= pad; mx += pad;
-  const xStep = (W - PAD * 2) / N;
-  const xAt = i => PAD + i * xStep + xStep / 2;
-  const yMap = v => H - PAD - ((v - mn) / (mx - mn)) * (H - PAD * 2);
-  ctx.strokeStyle = '#eeebe2'; ctx.lineWidth = 1;
-  for (let i = 0; i < 5; i++) {
-    const y = PAD + (H - PAD * 2) * (i / 4);
-    ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
-    ctx.fillStyle = '#a3a3a3'; ctx.font = '10px sans-serif';
-    ctx.fillText((mx - (mx - mn) * i / 4).toFixed(2), 6, y + 3);
-  }
-  const candleW = Math.max(xStep * 0.62, 1);
-  view.forEach((k, i) => {
-    const x = xAt(i);
-    const up = k.close >= k.open;
-    const color = up ? '#c0392b' : '#2e8b57';   // 涨红 跌绿
-    ctx.strokeStyle = color; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x, yMap(k.high)); ctx.lineTo(x, yMap(k.low)); ctx.stroke();
-    const top = yMap(Math.max(k.open, k.close));
-    const bot = yMap(Math.min(k.open, k.close));
-    ctx.fillStyle = color;
-    ctx.fillRect(x - candleW / 2, top, candleW, Math.max(bot - top, 1));
-  });
-  const maColors = ['#b86b3f', '#8a6a2f', '#4a7a8a', '#7a7a7a'];
-  maArrs.forEach((arr, k) => {
-    ctx.strokeStyle = maColors[k]; ctx.lineWidth = 1.4;
-    let started = false;
-    arr.slice(v0).forEach((v, i) => {
-      if (v == null) return;
-      if (!started) { ctx.beginPath(); ctx.moveTo(xAt(i), yMap(v)); started = true; }
-      else ctx.lineTo(xAt(i), yMap(v));
-    });
-    ctx.stroke();
-  });
-  ctx.font = '10px sans-serif';
-  ctx.fillStyle = '#b86b3f'; ctx.fillText('—MA5', W - PAD - 152, 16);
-  ctx.fillStyle = '#8a6a2f'; ctx.fillText('—MA10', W - PAD - 116, 16);
-  ctx.fillStyle = '#4a7a8a'; ctx.fillText('—MA20', W - PAD - 80, 16);
-  ctx.fillStyle = '#7a7a7a'; ctx.fillText('—MA60', W - PAD - 44, 16);
-  const last = view[view.length - 1];
-  ctx.fillStyle = '#2a2a2a'; ctx.font = 'bold 13px sans-serif';
-  ctx.fillText(`${code} · ${N} 个交易日`, PAD, 18);
-  ctx.fillStyle = '#6b6b6b'; ctx.font = '11px sans-serif';
-  ctx.fillText(`最新 ${last.close} (${last.date})`, PAD, H - 10);
+function drawKlineCanvas() {
+  /* 兼容空壳：旧签名 (bars, code, displayDays)。实际渲染由 KlineView 接管，
+     保留函数声明以免旧调用点报错。 */
+  if (window.KlineView && window.KlineView.render) window.KlineView.render();
 }
+
 
 // ========= 同步 =========
 function setSyncBtn(syncing) {
   const b = $('#btnSync');
   if (!b) return;
+  b.disabled = false;   // 复位「正在停止…」过渡态可能留下的禁用标记
   b.textContent = syncing ? '⏹ 停止同步' : '⬇ 同步数据';
   b.classList.toggle('btn-stop', syncing);
   b.title = syncing ? '停止当前正在进行的拉取任务' : '按当前范围增量同步最新行情';
 }
 async function startSync() {
   if (state.syncing) {   // 同步中 → 变成「停止」
+    const b = $('#btnSync');
+    // 立即给出「已受理」反馈：后端收到请求后 ≤0.25s 就会中断主循环（见 sync.py），
+    // 前端 pollSync 最快 1.5s 内看到 cancelled 并复位按钮，这里先改成过渡文案。
+    if (b) { b.disabled = true; b.textContent = '⏳ 正在停止…'; }
     try { await API.syncStop(); } catch (e) { console.warn(e); }
+    // 兜底：若 3s 后仍在 running（例如网络异常请求没送到），恢复可点状态，
+    // 让用户能再点一次；不掩盖错误也不卡死界面。
+    setTimeout(() => {
+      if (state.syncing && b) { b.disabled = false; setSyncBtn(true); }
+    }, 3000);
     return;              // pollSync 识别 cancelled 后复位按钮
   }
   try {
@@ -3706,9 +3748,12 @@ async function init() {
   });
   $('#btnLoadKline').addEventListener('click', loadKline);
   $('#klineCode').addEventListener('keydown', e => { if (e.key === 'Enter') loadKline(); });
-  // 三张图表：点击在新窗口打开高清大图
+  // 外观切换（5 套主题面板）+ 图表重绘注册（K 线由 kline.js 自理，这里注册大周期图）
+  bindThemeUI();   // 内含 setTheme(currentTheme()) 初始化按钮文案 / 面板选中态
+  window.__themeRedraw.push(() => { if (_cycleLast) { try { drawCycleChart(_cycleLast); } catch (e) { } } });
+  // 图表：点击在新窗口打开高清大图（K 线已迁移到 kline.js 的「📷 导出图片」按钮）
   [['#similarChart', '相似股走势对比'], ['#cycleChart', '大周期通道'],
-   ['#klineChart', 'K线走势'], ['#ant1000Chart', '长周期周期图']]
+   ['#ant1000Chart', '长周期周期图']]
     .forEach(([sel, name]) => {
       const cv = $(sel);
       if (cv) {
@@ -3870,12 +3915,15 @@ function bindGifFloat() {
   let idx = 0;
   const saved = localStorage.getItem('gifFloatHidden') === '1';
   if (saved) { box.style.display = 'none'; restore.hidden = false; }
-  // 恢复上次拖动位置
+  // 恢复上次拖动位置（v2 格式：存「距右下角的偏移」）。
+  // 用新键名 gifFloatPos2：旧键 gifFloatPos 存的是 left/top 绝对坐标，窗口尺寸一变
+  // 就会跑偏甚至出屏 → 直接弃用旧值，让悬浮窗回到 CSS 默认的右下角初始位置。
   try {
-    const pos = JSON.parse(localStorage.getItem('gifFloatPos') || 'null');
-    if (pos && pos.left != null) {
-      box.style.left = pos.left + 'px'; box.style.top = pos.top + 'px';
-      box.style.right = 'auto'; box.style.bottom = 'auto';
+    const pos = JSON.parse(localStorage.getItem('gifFloatPos2') || 'null');
+    if (pos && pos.right != null && pos.bottom != null) {
+      box.style.left = 'auto'; box.style.top = 'auto';
+      box.style.right = Math.max(0, pos.right) + 'px';
+      box.style.bottom = Math.max(0, pos.bottom) + 'px';
     }
   } catch (e) {}
   GIF_LIST.slice(0, 4).forEach(n => { const im = new Image(); im.src = '/static/gifs/' + n + '.gif'; });  // 仅预热前 4 张，其余点击切换时按需加载（32 张全预热约 25MB）
@@ -3883,6 +3931,16 @@ function bindGifFloat() {
   // —— 拖动（位移 >5px 判定为拖动，否则视为点击切换）——
   let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
   const DRAG_TH = 5;
+  // 松手后把「左上角坐标」换算成「距右下角偏移」存储，并立刻切回 right/bottom 定位：
+  // 这样浏览器窗口缩放时悬浮窗锚定右下角，不会越缩越偏（旧的 left/top 存法会出屏）。
+  function saveGifPos() {
+    const r = box.getBoundingClientRect();
+    const right = Math.max(0, Math.round(window.innerWidth - r.right));
+    const bottom = Math.max(0, Math.round(window.innerHeight - r.bottom));
+    try { localStorage.setItem('gifFloatPos2', JSON.stringify({ right, bottom })); } catch (e) { }
+    box.style.left = 'auto'; box.style.top = 'auto';
+    box.style.right = right + 'px'; box.style.bottom = bottom + 'px';
+  }
   box.addEventListener('mousedown', e => {
     if (e.target === hide) return;   // ✕ 按钮不触发拖动
     const r = box.getBoundingClientRect();
@@ -3906,8 +3964,7 @@ function bindGifFloat() {
     if (!dragging) return;
     dragging = false;
     if (moved) {
-      const r = box.getBoundingClientRect();
-      localStorage.setItem('gifFloatPos', JSON.stringify({ left: r.left, top: r.top }));
+      saveGifPos();
     } else {
       switchGif();   // 未拖动 = 点击切换下一张
     }
@@ -3936,8 +3993,7 @@ function bindGifFloat() {
     if (!dragging) return;
     dragging = false;
     if (moved) {
-      const r = box.getBoundingClientRect();
-      localStorage.setItem('gifFloatPos', JSON.stringify({ left: r.left, top: r.top }));
+      saveGifPos();
     } else switchGif();
     moved = false;
   });

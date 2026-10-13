@@ -149,11 +149,14 @@ DEFAULTS: dict = {
 }
 
 SECTIONS = ["calendar", "stealth", "cold", "national", "foreign", "crowding", "chains",
-            "special"]
+            "macro", "special"]
 SECTION_LABELS = {
     "calendar": "日历预警", "stealth": "异动侦测", "cold": "冷门板块",
     "national": "国家队资金", "foreign": "外资重仓", "crowding": "拥挤度监控",
-    "chains": "传导链与宏观", "special": "特殊概念",
+    # 【2026-10-12 修复】原实现只有 "chains"（标签「传导链与宏观」）一个开关同时控制
+    # 产业链传导 + 宏观雷达 —— 前端点卡片标题「选入/踢出」时两者永远联动。
+    # 现拆分为两个独立 section：chains（产业链传导）、macro（宏观雷达）。
+    "chains": "产业链传导", "macro": "宏观雷达", "special": "特殊概念",
 }
 
 
@@ -1456,14 +1459,19 @@ def scan(cfg=None, sections=None, progress_cb: ProgressCb = None,
         out["crowding"] = _crowding_scan(hist_all, merged or pd.DataFrame(), c)
         step += 1
 
-    # --- 传导链 + 宏观雷达 ---
+    # --- 产业链传导（需要板块行情）与 宏观雷达（纯新闻驱动）**独立开关** ---
     if "chains" in sections:
-        prog(step, total_steps, "传导链与宏观雷达…")
+        prog(step, total_steps, "产业链传导雷达…")
         if merged is None:
-            notes.append("板块行情不可用，传导链实时进展已跳过（宏观雷达保留）")
+            notes.append("板块行情不可用，产业链传导实时进展已跳过")
         else:
             out["chains"] = _chain_radar(merged, c)
+        step += 1
+
+    if "macro" in sections:
         # 宏观雷达 v3：主题归类扫描 + 方向信号（纯新闻驱动，无静态知识卡）
+        # ⚠ 与 chains 完全独立：不依赖板块行情 merged，不受其失败影响
+        prog(step, total_steps, "宏观雷达（快讯主题扫描）…")
         narrative, sig_rows = _macro_radar()
         out["macro_narrative"] = narrative
         out["macro"] = sig_rows
@@ -1635,7 +1643,7 @@ def build_report_html(result: dict, cfg: Optional[dict] = None) -> str:
             ("埋伏窗口", "window", has("calendar")), ("异动侦测", "stealth", has("stealth")),
             ("冷门板块", "cold", has("cold")), ("国家队", "national", has("national")),
             ("外资重仓", "foreign", has("foreign")), ("拥挤度", "crowding", has("crowding")),
-            ("传导链", "chains", has("chains")), ("宏观雷达", "macro", has("chains")),
+            ("产业链", "chains", has("chains")), ("宏观雷达", "macro", has("macro")),
             ("特殊概念", "special", has("special")),
             ("参数附录", "params", True)]
     rail_html = "".join(f"<a href='#{i}'>{t}</a>" for t, i, ok in rail if ok)
@@ -1646,7 +1654,7 @@ def build_report_html(result: dict, cfg: Optional[dict] = None) -> str:
     chips.append(f"<span class='chip'>🕒 生成于 {date} {now}</span>")
     if res.get("elapsed") is not None:
         chips.append(f"<span class='chip'>⏱ 耗时 <b>{_esc(res.get('elapsed'))}s</b></span>")
-    chips.append(f"<span class='chip'>🧩 扫描模块 <b>{len(sections) or 7}</b> 个</span>")
+    chips.append(f"<span class='chip'>🧩 扫描模块 <b>{len(sections) or len(SECTIONS)}</b> 个</span>")
 
     parts = [
         "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">",
@@ -1740,6 +1748,9 @@ def build_report_html(result: dict, cfg: Optional[dict] = None) -> str:
         parts.append("<div class='card wide' id='chains'><h2>⛓️ 产业链传导雷达<small>上游涨价 → 中游滞后受益</small></h2>"
                      + _table(["链", "环节", "板块", "5日涨幅%", "5日净流入(亿)", "逻辑"],
                               rows, pct_cols=(3, 4), wide_cols=(5,)) + "</div>")
+
+    if has("macro"):
+        # 宏观雷达与产业链传导是**独立模块**（各自可单独选入/踢出），报告里也分开渲染
         mrows = [[m.get("类型", ""), m.get("触发", ""), m.get("细节", ""), m.get("方向", ""), m.get("应对", "")]
                  for m in res.get("macro", [])]
         narr = res.get("macro_narrative") or ""
