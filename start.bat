@@ -3,39 +3,82 @@ title Screengu - Unified Stock Screener
 cd /d "%~dp0"
 setlocal
 
+rem ============================================================
+rem  Requires Python 3.10+ (3.11 recommended).
+rem  Why: app/core/sync.py uses PEP 604 annotations (str | None)
+rem  without "from __future__ import annotations"; that raises
+rem  TypeError at import time on Python 3.9, so the app cannot
+rem  start at all. Failing here with a clear message beats a
+rem  confusing traceback three seconds later.
+rem ============================================================
+
+set "PORT=8765"
+set "MINPY=3.10"
+
 rem ---------- find a python that can actually run this app ----------
-rem Tries PATH python first, then the py launcher, then common install
-rem paths. Every candidate must be able to import the real deps, so a
-rem bare python without uvicorn/pandas will be skipped automatically.
+rem A candidate passes only if BOTH hold:
+rem   1) sys.version_info >= (3,10)
+rem   2) every hard dependency imports
+rem The old gate checked only 6 of them, so a machine that had
+rem uvicorn+pandas but no jieba / py_mini_racer / curl_cffi / tqdm
+rem passed the gate and then failed later at runtime.
 set "PYEXE="
+set "OLDEXE="
 for %%P in ("python" "py -3" "C:\Python311\python.exe" "C:\Python312\python.exe" "C:\Python313\python.exe") do (
   if not defined PYEXE (
-    %%~P -c "import uvicorn, fastapi, pandas, numpy, requests, akshare" >nul 2>&1
-    if not errorlevel 1 set "PYEXE=%%~P"
+    %%~P -c "import sys; assert sys.version_info >= (3, 10)" >nul 2>&1
+    if errorlevel 1 (
+      %%~P -c "import sys" >nul 2>&1
+      if not errorlevel 1 set "OLDEXE=%%~P"
+    ) else (
+      %%~P -c "import uvicorn, fastapi, pandas, numpy, requests, akshare, jieba, py_mini_racer, curl_cffi, tqdm" >nul 2>&1
+      if not errorlevel 1 set "PYEXE=%%~P"
+    )
   )
 )
 
-rem ---------- first run: no ready-to-use python, try auto setup ----------
+rem ---------- first run: no ready-to-use python ----------
 if not defined PYEXE (
-  echo [SETUP] No python with the required packages was found.
+  if defined OLDEXE (
+    echo [ERROR] Found Python at "%OLDEXE%" but it is OLDER than %MINPY%.
+    echo         This app requires Python %MINPY% or newer.
+    echo.
+    echo         Install from https://www.python.org/downloads/
+    echo         and tick "Add Python to PATH" during setup, then retry.
+    echo.
+    pause
+    exit /b 1
+  )
+  echo [SETUP] No Python with the required packages was found.
   echo         Trying to install dependencies automatically, 1-3 min...
   echo.
   where py >nul 2>&1
   if not errorlevel 1 (set "PYEXE=py -3") else (set "PYEXE=python")
+
+  %PYEXE% -c "import sys; assert sys.version_info >= (3, 10)" >nul 2>&1
+  if errorlevel 1 (
+    echo [ERROR] Python %MINPY% or newer was not found on this machine.
+    echo.
+    echo         Download it from https://www.python.org/downloads/
+    echo         and tick "Add Python to PATH" during setup, then retry.
+    echo.
+    pause
+    exit /b 1
+  )
+
   %PYEXE% -m pip install -r requirements.txt
-  %PYEXE% -c "import uvicorn, fastapi, pandas, numpy, requests, akshare" >nul 2>&1
+  %PYEXE% -c "import uvicorn, fastapi, pandas, numpy, requests, akshare, jieba, py_mini_racer, curl_cffi, tqdm" >nul 2>&1
   if errorlevel 1 (
     echo.
     echo [ERROR] Auto setup failed. Please run manually then retry:
     echo         %PYEXE% -m pip install -r requirements.txt
+    echo.
     pause
     exit /b 1
   )
   echo.
   echo [SETUP] Dependencies installed OK.
 )
-
-set "PORT=8765"
 
 rem ---------- check if port is already in use ----------
 netstat -ano | findstr ":%PORT% " | findstr "LISTENING" > nul

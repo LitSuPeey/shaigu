@@ -14,21 +14,35 @@ rem    1) prints the exit reason first, then pauses (window stays)
 rem    2) keeps the error visible instead of closing on crash
 rem    3) rescues the sync thread: sync runs with daemon=False, so
 rem       quitting waits for an in-flight sync to finish cleanly
+rem
+rem  Python 3.10+ is required (see start.bat header for why).
 rem ============================================================
 title Screengu-Server (keep open; close = stops server)
 cd /d "%~dp0"
 
 set "PORT=8765"
+set "MINPY=3.10"
 set "PYEXE="
+set "OLDEXE="
 for %%P in ("python" "py -3" "C:\Python311\python.exe" "C:\Python312\python.exe" "C:\Python313\python.exe") do (
   if not defined PYEXE (
-    %%~P -c "import uvicorn, fastapi, pandas, numpy, requests, akshare" >nul 2>&1
-    if not errorlevel 1 set "PYEXE=%%~P"
+    %%~P -c "import sys; assert sys.version_info >= (3, 10)" >nul 2>&1
+    if errorlevel 1 (
+      %%~P -c "import sys" >nul 2>&1
+      if not errorlevel 1 set "OLDEXE=%%~P"
+    ) else (
+      %%~P -c "import uvicorn, fastapi, pandas, numpy, requests, akshare, jieba, py_mini_racer, curl_cffi, tqdm" >nul 2>&1
+      if not errorlevel 1 set "PYEXE=%%~P"
+    )
   )
 )
 if not defined PYEXE (
-  echo [ERROR] No python with the required packages was found.
-  echo         Run start.bat first to install dependencies.
+  echo [ERROR] No usable Python found for the server.
+  if defined OLDEXE echo         "%OLDEXE%" is older than %MINPY%.
+  echo.
+  echo         Run start.bat first - it can install dependencies.
+  echo         If Python is missing entirely, install %MINPY%+ from
+  echo         https://www.python.org/downloads/
   echo.
   pause
   exit /b 1
@@ -44,7 +58,10 @@ echo   * If it crashes, the error stays on screen (no vanish).
 echo ============================================================
 echo.
 
-"%PYEXE%" -m uvicorn app.main:app --host 127.0.0.1 --port %PORT% --log-level info
+rem NOTE: %PYEXE% is intentionally unquoted. A candidate may be the
+rem launcher form "py -3"; quoting it would look for an executable
+rem literally named "py -3". None of the candidates contain spaces.
+%PYEXE% -m uvicorn app.main:app --host 127.0.0.1 --port %PORT% --log-level info
 set "RC=%errorlevel%"
 
 echo.
@@ -56,11 +73,12 @@ if "%RC%"=="0" (
   echo.
   echo   Common fixes:
   echo     - Port %PORT% busy:  netstat -ano ^| findstr :%PORT%
-  echo     - Missing deps:      "%PYEXE%" -m pip install -r requirements.txt
+  echo     - Missing deps:      %PYEXE% -m pip install -r requirements.txt
+  echo     - Python too old:    need %MINPY%+ (check: %PYEXE% --version)
   echo     - Read the traceback printed above.
   echo.
   echo   You can also run the server manually in this folder:
-  echo     "%PYEXE%" -m uvicorn app.main:app --host 127.0.0.1 --port %PORT%
+  echo     %PYEXE% -m uvicorn app.main:app --host 127.0.0.1 --port %PORT%
 )
 echo ============================================================
 echo.
