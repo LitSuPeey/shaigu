@@ -859,13 +859,22 @@
     window.__themeRedraw.push(function () { if (IX.chart.bars) setTimeout(drawChart, 80); });
   } catch (e) { /* ignore */ }
 
-  // 页面打开即弹（用户要求：每次打开先以近全屏弹出）
+  // 每天首次打开时弹一次（2026-11-05 调整）
+  // ★ 原行为是「每次刷新都弹近全屏浮层」，会挡住全部页签、必须先关掉才能干活。
+  //   现在按自然日记忆：当天第一次打开才弹，之后刷新不再打扰；
+  //   仍可随时点顶部「🌐 全球快照」手动打开。
   // ★ 必须先 initIdxhub()：悬浮窗是直接打开、不走 switchTab，
   //   不先绑定按钮就会「点上没反应」（关不掉、进不了页签）。
   function autoOpen() {
     var box = $('#ixFlash');
     if (!box) return;
     if (box.hidden === false) return;
+    try {
+      var d = new Date();
+      var today = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+      if (localStorage.getItem('idxFlashSeenDay') === today) return;
+      localStorage.setItem('idxFlashSeenDay', today);
+    } catch (e) { /* 隐私模式读不到 localStorage：退回每次弹 */ }
     try { initIdxhub(); } catch (e) { /* ignore */ }
     openFlash(true);
   }

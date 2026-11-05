@@ -222,6 +222,42 @@
     return String(text || '').split(/[\s,，;；]+/).filter(Boolean);
   }
 
+  // 与「条件筛选」页共用同一套 BOLL 阈值：
+  // 以前本页把 20/2/1.0/0.30 写死在 Python 里，用户在条件页改了 BOLL_N，
+  // 回本页结果对不上且毫无提示。现在直接读条件页的输入框，并回显实际生效值。
+  function numOf(id, dv) {
+    var el = document.getElementById(id);
+    var v = el ? parseFloat(el.value) : NaN;
+    return Number.isFinite(v) ? v : dv;
+  }
+
+  function bollParams() {
+    var ma = document.getElementById('pBollBreakMa60');
+    return {
+      n: numOf('pBollN', 20),
+      k: numOf('pBollK', 2),
+      tol: numOf('pBollTouchTol', 1),
+      rb: numOf('pBollReboundRatio', 0.30),
+      trend_days: numOf('pBollMaxTrendDays', 3),
+      break_vol: numOf('pBollBreakVol', 1.20),
+      break_widen: numOf('pBollBreakWiden', 0.95),
+      break_days: numOf('pBollBreakDays', 5),
+      lookback: numOf('pBollBreakLookback', 10),
+      ma60: (ma && ma.checked) ? 1 : 0
+    };
+  }
+
+  function refreshBollHint() {
+    var el = document.getElementById('bfBollHint');
+    if (!el) return;
+    var p = bollParams();
+    el.innerHTML = '当前 BOLL 阈值与「条件筛选」页共用：' +
+      '周期 <b>' + p.n + '</b> · 倍数 <b>' + p.k + '</b>' +
+      ' · 触轨容差 <b>' + p.tol + '%</b>' +
+      ' · 收回/带宽 <b>' + p.rb + '</b>' +
+      (p.ma60 ? ' · 需站上 60 日线' : '');
+  }
+
   function run() {
     var keys = checkedFilters();
     if (!keys.length) { msg('请至少勾选一个 BOLL 过滤器', 'warn'); return; }
@@ -229,12 +265,14 @@
     var source = (($('#bfScope') || {}).value) || 'market';
     var gate = (($('#bfGate') || {}).value) || 'any';
     var minBars = parseInt(($('#bfMinBars') || {}).value, 10) || 120;
+    var boll = bollParams();
+    refreshBollHint();
 
     var doRun = function () {
       var payload;
       if (source === 'custom') {
         payload = { codes: parseCodes(($('#bfCodes') || {}).value),
-                    filters: keys, state_filter: gate, min_bars: minBars };
+                    filters: keys, state_filter: gate, min_bars: minBars, boll: boll };
         if (!payload.codes.length) { msg('请填写股票代码（逗号/空格分隔）', 'warn'); return; }
       } else {
         // 复用已取好的池（避免重复跑 beton 的 80s）
@@ -243,7 +281,7 @@
           return;
         }
         payload = { codes: POOL_CACHE.codes, filters: keys,
-                    state_filter: gate, min_bars: minBars };
+                    state_filter: gate, min_bars: minBars, boll: boll };
       }
 
       setRunBusy(true);
@@ -424,9 +462,10 @@
   }
 
   function init() {
-    if (INITED) { loadMarket(); return; }
+    if (INITED) { loadMarket(); refreshBollHint(); return; }
     INITED = true;
     bindControls();
+    refreshBollHint();
     loadFilters();
     loadMarket();
     loadSources().then(function () {

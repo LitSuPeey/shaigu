@@ -977,6 +977,11 @@ body.sb-collapsed .workspace { margin-left: var(--sb-w-min); }
   position: relative; z-index: 40;
   display: flex; align-items: center; gap: 12px;
   height: 36px; flex: none;
+  /* ★ 覆盖 style.css 的旧布局（max-width:1400px; margin:0 auto）：
+     在 1440 视口下那条规则会让快讯条按 max-content 撑到 1400px，
+     把文档宽度拉到 1636px，右侧 ~200px 内容被挤出屏幕（全站横向滚动条）。
+     这里显式复位，让它作为 .workspace 的列向 flex 子项铺满可用宽度。 */
+  width: auto; max-width: none; margin: 0; align-self: stretch; min-width: 0;
   padding: 0 20px 0 24px;
   background: linear-gradient(90deg, rgba(var(--accent-rgb), .05), transparent 30%);
   border-bottom: 1px solid var(--line-soft);

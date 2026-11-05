@@ -77,6 +77,11 @@
   background: var(--bg-soft); color: var(--ink-soft);
   font-weight: 600; text-align: center; white-space: nowrap;
 }
+/* ★ 2026-11-05 修重叠：style.css 里有一条全局 `thead th{position:sticky;top:74px}`，
+   本表的 thead 被 sticky 顶到容器下方 74px，正好压在「⑭ 下轨低吸 T+20」那一行上
+   （表现为表头与数据行文字重叠、首行没有左侧条件名）。披露表只有 6 行、本来
+   就不需要吸顶表头，这里显式复位。 */
+.bfd-table thead th { position: static; top: auto; z-index: auto; }
 .bfd-table td:first-child { text-align: left; font-weight: 600; color: var(--ink); }
 .bfd-table td:nth-child(2) { text-align: center; }
 .bfd-table td.neg { color: var(--bad); }

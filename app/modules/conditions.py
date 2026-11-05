@@ -352,30 +352,72 @@ def cond_boll_break_mid(ctx, cfg):
     return False
 
 
+def _val_window(v) -> int:
+    """把用户填的「估值回看年数」吸附到快照预计算的档位（1/3/5/10）。
+
+    ★ 为什么是吸附而不是任意年：分位要扫 940 万行估值，任意年数只能每次现算
+      （约 15-20s/次）。快照已预计算四档（构建多花约 7s），吸附到最近档即可
+      让参数真实生效，代价是只有 1/3/5/10 四个精度。返回值同时回传给前端展示。
+    """
+    try:
+        y = float(v)
+    except (TypeError, ValueError):
+        return 10
+    if not np.isfinite(y):
+        return 10
+    y = max(1.0, min(20.0, y))
+    return min((1, 3, 5, 10), key=lambda w: (abs(w - y), -w))
+
+
+def _snap_pct(snap, kind: str, years: int):
+    """从快照取指定窗口的分位与样本数（kind = pe / pb）。"""
+    suffix = "10y" if years >= 10 else f"{years}y"
+    pct_key = f"{kind}_pct" if years >= 10 else f"{kind}_pct_{suffix}"
+    n_key = f"val_n_{suffix}"
+    return snap.get(pct_key), snap.get(n_key)
+
+
+def describe_cfg(cfg) -> dict:
+    """回传「实际生效」的估值窗口/样本门槛，供前端如实展示（避免假控制感）。"""
+    c = {**DEFAULTS, **(cfg or {})}
+    return {
+        "val_years": _val_window(c.get("VAL_YEARS", 10)),
+        "min_val_rows": int(float(c.get("MIN_VAL_ROWS", 0) or 0)),
+    }
+
+
 def cond_pe_low(ctx, cfg):
-    """⑧ PE低估（走快照表，秒级）。"""
+    """⑧ PE低估（走快照表，秒级）。回看窗口与最少样本数由 cfg 控制。"""
     snap = ctx.get("snap")
     if not snap:
         return False
     pe = snap.get("pe_ttm")
-    pe_pct = snap.get("pe_pct")
+    years = _val_window(cfg.get("VAL_YEARS", 10))
+    pe_pct, n = _snap_pct(snap, "pe", years)
     if pe is None or pe_pct is None:
         return False
     if pd.isna(pe) or pd.isna(pe_pct) or pe <= 0:
+        return False
+    min_rows = int(float(cfg.get("MIN_VAL_ROWS", 0) or 0))
+    if min_rows > 0 and n is not None and (pd.isna(n) or float(n) < min_rows):
         return False
     return float(pe_pct) <= float(cfg["PE_PERCENTILE"])
 
 
 def cond_pb_low(ctx, cfg):
-    """⑨ PB低估（走快照表，秒级）。"""
+    """⑨ PB低估（走快照表，秒级）。回看窗口与最少样本数由 cfg 控制。"""
     snap = ctx.get("snap")
     if not snap:
         return False
     pb = snap.get("pb")
-    pb_pct = snap.get("pb_pct")
+    years = _val_window(cfg.get("VAL_YEARS", 10))
+    pb_pct, n = _snap_pct(snap, "pb", years)
     if pb is None or pb_pct is None:
         return False
     if pd.isna(pb) or pd.isna(pb_pct) or pb <= 0:
+        return False
+    min_rows = int(float(cfg.get("MIN_VAL_ROWS", 0) or 0))
+    if min_rows > 0 and n is not None and (pd.isna(n) or float(n) < min_rows):
         return False
     return float(pb_pct) <= float(cfg["PB_PERCENTILE"])
 
@@ -526,11 +568,18 @@ def _load_ctx(code, cfg, cache, lock, needs=None):
         ctx["meta"] = meta
     if "snap" in fields:
         srow = rconn.execute(
-            "SELECT pe_ttm, pb, pe_pct, pb_pct, div_yield FROM snapshot WHERE code=?",
-            (str(code),)).fetchone()
+            "SELECT pe_ttm, pb, pe_pct, pb_pct, div_yield, "
+            "       pe_pct_1y, pe_pct_3y, pe_pct_5y, "
+            "       pb_pct_1y, pb_pct_3y, pb_pct_5y, "
+            "       val_n_1y, val_n_3y, val_n_5y, val_n_10y "
+            "FROM snapshot WHERE code=?", (str(code),)).fetchone()
         ctx["snap"] = {
             "pe_ttm": srow[0], "pb": srow[1], "pe_pct": srow[2],
             "pb_pct": srow[3], "div_yield": srow[4],
+            "pe_pct_1y": srow[5], "pe_pct_3y": srow[6], "pe_pct_5y": srow[7],
+            "pb_pct_1y": srow[8], "pb_pct_3y": srow[9], "pb_pct_5y": srow[10],
+            "val_n_1y": srow[11], "val_n_3y": srow[12],
+            "val_n_5y": srow[13], "val_n_10y": srow[14],
         } if srow else {}
     with lock:
         cache[key] = ctx

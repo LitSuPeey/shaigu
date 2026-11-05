@@ -102,7 +102,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             close REAL, prev_close REAL, pct_chg REAL,
             volume REAL, amount REAL, turnover REAL,
             pe_ttm REAL, pb REAL, pe_pct REAL, pb_pct REAL,
-            div_yield REAL);
+            div_yield REAL,
+            -- 多窗口估值分位（1/3/5/10 年；pe_pct/pb_pct 即 10 年档）
+            pe_pct_1y REAL, pe_pct_3y REAL, pe_pct_5y REAL,
+            pb_pct_1y REAL, pb_pct_3y REAL, pb_pct_5y REAL,
+            val_n_1y REAL, val_n_3y REAL, val_n_5y REAL, val_n_10y REAL);
     """)
     conn.commit()
 

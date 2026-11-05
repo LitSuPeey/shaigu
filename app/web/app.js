@@ -679,7 +679,11 @@ async function runConditions() {
       renderTable('condTable', []);
       return;
     }
-    showMeme('condMeme', 'success', `${keys.length} 条件命中 ${rows.length} 只 ✨`, '按 PE-TTM 升序展示');
+    const eff = data.effective || null;
+    const effTxt = eff
+      ? `按 PE-TTM 升序展示 · 估值分位按 ${eff.val_years} 年窗口`
+      : '按 PE-TTM 升序展示';
+    showMeme('condMeme', 'success', `${keys.length} 条件命中 ${rows.length} 只 ✨`, effTxt);
     renderTable('condTable', rows, { max: 300 });
   } catch (e) {
     hideOverlay();
@@ -3031,9 +3035,15 @@ async function loadTicker(force = false) {
           ? it.kws
           : (it.kw ? [{ kw: it.kw, url: it.kw_url || it.url }] : []);
         const kwHtml = kws.map(k =>
-          `<a class="tk-kw" href="${escHtml(k.url)}" target="_blank" rel="noopener" title="${escHtml(it.time || '')} 关键词检索">【${escHtml(k.kw)}】</a>`).join('');
+          k.url
+            ? `<a class="tk-kw" href="${escHtml(k.url)}" target="_blank" rel="noopener" title="${escHtml(it.time || '')} 关键词检索">【${escHtml(k.kw)}】</a>`
+            : `<span class="tk-kw">【${escHtml(k.kw)}】</span>`).join('');
+        // 无原文链接（财联社兜底源）→ 渲染成纯文本，避免 href="" 点击刷新页面
+        const txt = it.url
+          ? `<a href="${escHtml(it.url)}" target="_blank" rel="noopener" title="阅读原文">${escHtml(it.text)}</a>`
+          : `<span title="${escHtml(it.time || '')}">${escHtml(it.text)}</span>`;
         return `<span class="tk-item">` + kwHtml +
-          `<span class="tk-txt"><a href="${escHtml(it.url)}" target="_blank" rel="noopener" title="阅读原文">${escHtml(it.text)}</a></span></span>`;
+          `<span class="tk-txt">${txt}</span></span>`;
       }
       if (it.type === 'stock') {
         return `<span class="tk-item"><a class="tk-stock" href="${escHtml(it.url)}" target="_blank" rel="noopener">📈 ${escHtml(it.name)} ${escHtml(it.code)} ↗</a></span>`;

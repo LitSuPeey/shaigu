@@ -270,11 +270,20 @@ def _norm_code(code: str) -> str:
 
 # ========== 全市场快照 / 上市日期 / 板块 ==========
 def fetch_spot(timeout: int = 15) -> pd.DataFrame:
-    """全市场股票清单，三级源按成本升序降级：
-    1. 东财全市场快照 stock_zh_a_spot_em（1 次请求，含最新价/涨跌幅）
-    2. 沪深京官方列表 stock_info_a_code_name（4 次请求，无价格）
-    3. 新浪逐页快照 stock_zh_a_spot（80 只/页 ≈ 70+ 次请求，官方文档明示易封 IP，
-       仅作最后兜底；旧版曾以它为主源，是 meta 刷新慢的主因之一）"""
+    """全市场股票清单，按**实测耗时**升序降级（2026-11-05 重排）：
+
+    ① 沪深京官方列表 stock_info_a_code_name  —— ~10s（18 页），权威、能发现新股
+    ② 东财全市场快照 stock_zh_a_spot_em      —— **实测 ~78s**，仅兜底
+    ③ 新浪逐页快照 stock_zh_a_spot           —— 最慢，最后兜底
+
+    ★ 为什么把 ① 提到 ② 前面（11-05 实测，60s 级问题）：
+      akshare 的 stock_zh_a_spot_em() 早已不是「1 次请求」，内部改成约 59 页分页
+      （5927 行 / 78.1s）。而本函数用 timeout=15 调它 → **每次都注定超时**，
+      白等 15~30s（retries=1）才退回 ①。实测 fetch_spot 总耗时 45.7s，
+      其中约 30s 是等一个不可能在 15s 内完成的调用。
+      重排后：① 直接命中（~10s），② 只在 ① 失败时才尝试。
+    价格不丢：① 本身无价格，用腾讯批量快照补（5578 只 / ~0.2s，见 _fetch_tx_spot_all）。
+    """
     def _norm(df, code_col="code"):
         df = df.copy()
         df[code_col] = df[code_col].apply(_norm_code)
@@ -287,7 +296,39 @@ def fetch_spot(timeout: int = 15) -> pd.DataFrame:
         df["change_pct"] = pd.to_numeric(df["change_pct"], errors="coerce")
         return df[["code", "name", "price", "change_pct"]].reset_index(drop=True)
 
-    try:  # ① 东财快照：1 次请求，代码/名称/最新价/涨跌幅
+    def _fill_px(df):
+        """用腾讯批量快照补最新价/涨跌幅（[3]现价 [32]涨跌幅）。失败保持 NaN。"""
+        try:
+            raw = _fetch_tx_spot_all(df["code"].astype(str).tolist(),
+                                     workers=4, timeout=timeout)
+            if len(raw) < 1000:          # 拿得太少视为失败，不覆盖
+                return df
+            px = {}
+            for c, f in raw.items():
+                if len(f) >= 33:
+                    px[str(c)] = (f[3], f[32])
+            if not px:
+                return df
+            df = df.copy()
+            codes = df["code"].astype(str)
+            df["price"] = pd.to_numeric(
+                [px.get(c, (None, None))[0] for c in codes], errors="coerce")
+            df["change_pct"] = pd.to_numeric(
+                [px.get(c, (None, None))[1] for c in codes], errors="coerce")
+        except Exception:  # noqa: BLE001 —— 补价失败不影响清单本身
+            pass
+        return df
+
+    try:  # ① 沪深京官方列表：~10s，权威且能发现新股
+        df = _call_ak("名称代码表", lambda: ak.stock_info_a_code_name(),
+                      retries=2, timeout=timeout)
+        if not all(c in df.columns for c in ("code", "name")):
+            raise RuntimeError("列缺失")
+        df = df[df["code"].astype(str).str.match(r"^\d{6}$", na=False)]
+        return _fill_px(_norm(df))
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # ② 东财快照：akshare 内部已分页（~59 页 / 78s），只在 ① 失败时兜底
         df = _call_ak("东财全市场快照", lambda: ak.stock_zh_a_spot_em(),
                       retries=1, timeout=timeout)
         df = df.rename(columns={"代码": "code", "名称": "name",
@@ -298,13 +339,7 @@ def fetch_spot(timeout: int = 15) -> pd.DataFrame:
         return _norm(df)
     except Exception:  # noqa: BLE001
         pass
-    try:  # ② 沪深京官方列表：4 次请求
-        df = _call_ak("名称代码表", lambda: ak.stock_info_a_code_name(),
-                      retries=2, timeout=timeout)
-        return _norm(df)
-    except Exception:  # noqa: BLE001
-        pass
-    # ③ 新浪逐页快照（慢，兜底）
+    # ③ 新浪逐页快照（最慢，最后兜底）
     df = _call_ak("全市场快照", lambda: ak.stock_zh_a_spot(), retries=2,
                   timeout=timeout)
     df = df.rename(columns={"代码": "raw_code", "名称": "name",
@@ -1744,7 +1779,14 @@ def refresh_meta_and_sectors(refresh_sector: bool = False) -> dict:
             existing = set()
             stored_names = []
             stored_map = {}
-        missing = [(bname, bcode) for bname, bcode in boards
+        # ★ 2026-11-05 修复元组顺序错位：
+        #   fetch_board_list() 返回的是 (板块代码, 板块名)，例如 ('801010','农林牧渔')。
+        #   原写法 `for bname, bcode in boards` 把**代码**当成了名字，
+        #   于是 `bname not in existing`（existing 存的是名称）恒为真 →
+        #   31 个板块每次刷新都被判为「缺失」而全部重拉（实测多耗 ~12s），
+        #   而且传给 fetch_sector_members(board_name, board_code) 的两个参数也是反的
+        #   （它用第二个参数当 API 的 symbol）→ 请求必失败，属于「白跑 + 潜在写脏」。
+        missing = [(bname, bcode) for bcode, bname in boards
                    if bname not in existing]
         # 成分接口逐板块一次请求（申万一级 31 个）：并行拉取（纯网络，8 并发），
         # 拉到即串行写库（单写者），整体从 30s+ 降到 ~5s

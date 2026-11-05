@@ -605,7 +605,7 @@
     // 首次访问提示（只弹一次）
     if (!LS.get('shaigu.v4hint')) {
       LS.set('shaigu.v4hint', '1');
-      setTimeout(function () { toast('按 Ctrl+K 可快速跳转到任意页签', 'info', 4600); }, 1800);
+      setTimeout(function () { toast('按 Ctrl+K 可快速跳转到任意页签', 'info', 3000); }, 1800);
     }
 
     // 表格空行提示：按当前面板的主按钮命名动作，引导更具体

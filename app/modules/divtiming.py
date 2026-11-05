@@ -81,9 +81,62 @@ def _sig(conn, loss_years=None) -> tuple:
         return None
 
 
+def _cache_path() -> str:
+    import os
+    from ..core import db as _db
+    root = os.path.dirname(os.path.abspath(_db.db_path()))
+    return os.path.join(root, "divtiming_cache.json.gz")
+
+
+def _load_disk(sig):
+    """落盘缓存：冷启动建画像实测 12.6s，读盘 ~0.1s。
+
+    缓存键 = (dividend 行数, max(ex_date), valuation 行数, loss_years)，
+    任何一次同步改变数据都会自然失效——不会读到过期画像。
+    """
+    import gzip
+    import json
+    if sig is None:
+        return None, None
+    try:
+        with gzip.open(_cache_path(), "rt", encoding="utf-8") as f:
+            j = json.load(f)
+        if tuple(j.get("sig") or ()) != tuple(sig):
+            return None, None
+        profiles = {}
+        for code, p in (j.get("profiles") or {}).items():
+            # JSON 的 object key 一定是字符串，months 的月份键要还原成 int
+            p["months"] = {int(k): v for k, v in (p.get("months") or {}).items()}
+            profiles[code] = p
+        return profiles, set(j.get("loss") or [])
+    except Exception:      # noqa: BLE001 —— 缓存损坏就当没有
+        return None, None
+
+
+def _save_disk(sig, profiles, loss) -> None:
+    import gzip
+    import json
+    import os
+    if sig is None:
+        return
+    try:
+        path = _cache_path()
+        tmp = path + ".tmp"
+        with gzip.open(tmp, "wt", encoding="utf-8") as f:
+            json.dump({"sig": list(sig), "profiles": profiles,
+                       "loss": sorted(loss or [])}, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:      # noqa: BLE001
+        pass
+
+
 def _cached(conn, sig):
     if sig is not None and _PROF_CACHE["sig"] == sig:
         return _PROF_CACHE["profiles"], _PROF_CACHE["loss"]
+    profiles, loss = _load_disk(sig)
+    if profiles is not None:
+        _store(sig, profiles, loss)
+        return profiles, loss
     return None, None
 
 
@@ -91,6 +144,7 @@ def _store(sig, profiles, loss):
     _PROF_CACHE["sig"] = sig
     _PROF_CACHE["profiles"] = profiles
     _PROF_CACHE["loss"] = loss
+    _save_disk(sig, profiles, loss)
 
 
 # ============ 画像：从本地 dividend 表统计亩只个股的除权习惯 ============

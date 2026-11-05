@@ -427,8 +427,16 @@ def _pctile(hist: pd.Series, cur) -> Optional[float]:
     return round(float((s < cur).mean() * 100), 1)
 
 
-def _flow5_of(merged: pd.DataFrame, name: str) -> Optional[float]:
-    """板块 5 日主力净流入（亿元）。"""
+def _flow5_of(merged: Optional[pd.DataFrame], name: str) -> Optional[float]:
+    """板块 5 日主力净流入（亿元）。
+
+    ★ 必须容忍 merged 为 None / 空表 / 缺列：板块行情是联网数据，失败时上游
+      传下来的是 None（不是空 DataFrame），旧实现直接取列会 KeyError；
+      而调用方写成 `merged or pd.DataFrame()` 会触发 pandas 的真值判断异常
+      （"truth value of a DataFrame is ambiguous"），整次预警直接失败。
+    """
+    if merged is None or getattr(merged, "empty", True) or "板块名称" not in merged.columns:
+        return None
     row = merged.loc[merged["板块名称"] == name]
     if row.empty:
         return None
@@ -1456,7 +1464,7 @@ def scan(cfg=None, sections=None, progress_cb: ProgressCb = None,
     # --- 拥挤度 ---
     if "crowding" in sections:
         prog(step, total_steps, "板块拥挤度监控…")
-        out["crowding"] = _crowding_scan(hist_all, merged or pd.DataFrame(), c)
+        out["crowding"] = _crowding_scan(hist_all, merged, c)
         step += 1
 
     # --- 产业链传导（需要板块行情）与 宏观雷达（纯新闻驱动）**独立开关** ---

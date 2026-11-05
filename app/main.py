@@ -93,12 +93,24 @@ def _startup():
     # 快照表为空时后台自动构建（估值/股息条件依赖）
     try:
         from app.core import snapshot as _snap
-        if not _snap.snapshot_ready():
-            log.info("快照表为空，后台构建中…")
+        # ★ 老库升级：先补新列，再判断要不要重算。否则新代码去 SELECT 不存在的列
+        #   会被逐股 try/except 吞掉 → PE/PB 条件静默返回 0 只（最难发现的那种故障）。
+        _snap.ensure_cols(core_db.writer())
+        if not _snap.snapshot_ready() or _snap.needs_rebuild(core_db.writer()):
+            log.info("快照表为空或版本过旧，后台构建中…")
             import threading
             threading.Thread(
                 target=lambda: _snap.build_snapshot() and None,
                 daemon=True).start()
+        else:
+            # ★ 大盘状态预热（2026-11-05）：首次访问 /api/bollfilter/market 要顺扫
+            #   1.9GB hist.db（实测 49s），用户进「数据过滤」会以为卡死。
+            #   结果已落盘到 data/market_state.json.gz，正常启动只要 ~0.2s；
+            #   这里再预热一次，确保进程内缓存也是热的。放在后台线程，不拖慢启动。
+            import threading
+            from app.modules import bollfilter as _bf
+            threading.Thread(target=_bf.market_state, daemon=True,
+                             name="prewarm-market-state").start()
     except Exception as e:
         log.warning(f"快照检查失败: {e}")
 

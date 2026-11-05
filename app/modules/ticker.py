@@ -354,31 +354,51 @@ def _strip_head(text: str) -> str:
     return re.sub(r"^【[^】]*】\s*", "", text or "").strip()
 
 
+def _cell(v) -> str:
+    """pandas 单元格 → 干净字符串。
+
+    ★ NaN 是 truthy，`str(r["摘要"] or "")` 会得到字符串 "nan"，
+      链接列同样会把 "nan" 当成 URL（实测东财偶发空摘要）。
+    """
+    if v is None:
+        return ""
+    try:
+        if v != v:          # NaN
+            return ""
+    except Exception:       # noqa: BLE001
+        pass
+    s = str(v).strip()
+    return "" if s.lower() in ("nan", "none", "nat") else s
+
+
 def _news_items() -> list[dict]:
     """近日快讯：东财(200条带链接) → 富途(50条带链接) → 财联社。返回含 title/text/url/time。"""
     ak = _ak()
     items: list[dict] = []
     try:
         df = ak.stock_info_global_em()
-        items = [{"title": str(r["标题"]).strip(),
-                  "text": _strip_head(str(r["摘要"] or "")) or str(r["标题"]).strip(),
-                  "url": str(r["链接"] or "").strip(),
-                  "time": str(r["发布时间"])[:16]}
+        items = [{"title": _cell(r["标题"]),
+                  "text": _strip_head(_cell(r["摘要"])) or _cell(r["标题"]),
+                  "url": _cell(r["链接"]),
+                  "time": _cell(r["发布时间"])[:16]}
                  for _, r in df.iterrows()]
     except Exception:  # noqa: BLE001
         try:
             df = ak.stock_info_global_futu()
-            items = [{"title": (str(r["标题"]).strip() or str(r["内容"]).strip()[:24]),
-                      "text": _strip_head(str(r["内容"] or ""))[:120],
-                      "url": str(r["链接"] or "").strip(),
-                      "time": str(r["发布时间"])[:16]}
+            items = [{"title": (_cell(r["标题"]) or _cell(r["内容"])[:24]),
+                      "text": _strip_head(_cell(r["内容"]))[:120],
+                      "url": _cell(r["链接"]),
+                      "time": _cell(r["发布时间"])[:16]}
                      for _, r in df.iterrows()]
         except Exception:  # noqa: BLE001
             try:
                 df = ak.stock_info_global_cls()
-                items = [{"title": str(r["标题"]).strip(),
-                          "text": _strip_head(str(r["内容"] or "")) or str(r["标题"]).strip(),
-                          "url": "", "time": str(r["发布日期"])}
+                items = [{"title": _cell(r["标题"]),
+                          "text": _strip_head(_cell(r["内容"])) or _cell(r["标题"]),
+                          "url": "",
+                          # 财联社分「发布日期 + 发布时间」两列，只取日期会丢掉时分
+                          "time": (_cell(r["发布日期"]) + " " +
+                                   _cell(r.get("发布时间"))[:5]).strip()}
                          for _, r in df.iterrows()]
             except Exception:  # noqa: BLE001
                 return []
@@ -396,11 +416,17 @@ def _news_items() -> list[dict]:
 
 # ============ 关键词跳转链接工具 ============
 _BILI_BASE = "https://search.bilibili.com/all?vt=02441088&keyword="
+_EM_SEARCH = "https://so.eastmoney.com/news/s?keyword="
 
 
 def _bili_url(kw: str) -> str:
     """B 站搜索链接（中文关键词需 URL 编码）。"""
     return _BILI_BASE + quote(kw)
+
+
+def _em_url(kw: str) -> str:
+    """东方财富新闻搜索：金融类关键词查资讯比 B 站有用得多。"""
+    return _EM_SEARCH + quote(kw)
 
 
 # 标题自带【】中的泛化分类词（无实体信息量，不做关键词徽章）
@@ -412,21 +438,43 @@ _GENERIC_TAGS = {
     "风险", "预警", "机会", "掘金", "调研", "纪要", "科普", "专题", "策略", "财经",
     "股市", "证券", "期货", "基金", "全球", "国际", "国内", "中国", "动态", "资讯",
     "速报", "要闻", "必读", "盘中", "收盘", "开盘", "午评", "收评", "日评", "周评",
+    # ★ 2026-11-05：实测高频噪声词（做徽章没有检索价值，且会把真实体挤掉）
+    "现货", "高达", "主力合约", "美股", "美国", "市场", "消息", "报告", "亿元",
+    "美元", "同比", "环比", "记者", "人士", "方面", "情况", "问题", "影响",
+    "最新", "本周", "上周", "今年", "去年", "明年", "早盘", "尾盘", "全天",
+    "股价", "续刷", "记录", "新高", "新低", "消息", "截止",
 }
 
 # 金油词豁免：这些关键词保留问财行情跳转（其余一律 B 站搜索）
 _GOLD_OIL_WORDS = {"伦敦金", "布伦特", "原油"}
+
+# 海外/非 A 股重要实体：jieba 会把「英伟达」切成「英/伟达」、「礼来」切成「礼/来」，
+# 词性分词拿不到完整专名 → 用一张小词表在分词前直接命中（长词优先）。
+# 只收「对 A 股板块有传导」的名字，避免把词表做成第二个新闻源。
+_ENTITY_WORDS = sorted([
+    "英伟达", "台积电", "特斯拉", "苹果公司", "苹果", "微软", "谷歌", "亚马逊",
+    "英特尔", "博通", "超微", "阿斯麦", "礼来", "诺和诺德", "摩根大通", "高盛",
+    "摩根士丹利", "伯克希尔", "巴菲特", "马斯克", "黄仁勋", "库克", "OpenAI",
+    "高通", "美光", "闪迪", "西部数据", "德州仪器",
+    "三星", "SK海力士", "索尼", "丰田", "空客", "波音", "壳牌", "沙特阿美",
+], key=len, reverse=True)
 
 # 报道套话（动词性，但作检索关键词无信息量，jieba 提取时过滤）
 _STOP_VERBS = {
     "称", "表示", "通报", "获悉", "报道", "宣布", "要求", "显示", "预计", "认为",
     "指出", "提醒", "介绍", "分析", "透露", "消息", "发布", "召开", "举行", "回应",
     "有关", "方面", "今日", "明日", "昨日", "近日", "目前", "目前", "记者", "总台",
+    # ★ 行情涨跌动词：做检索词没有意义，会把真实体挤掉（实测「现货钯金最新上涨5%」
+    #   被 TF-IDF 兜底成「上涨」）
+    "上涨", "下跌", "下挫", "大涨", "大跌", "飙升", "回落", "走高", "走低",
+    "反弹", "回调", "收涨", "收跌", "刷新", "创下", "突破", "报收",
+    "涨幅", "跌幅", "扩大", "收窄", "延续", "重挫", "跌超", "涨超",
+    "续刷记录", "续刷", "创新高", "创新低", "股价",
 }
 
 # 虚字过滤：候选词首/尾字命中则丢弃（挡"已使""超65"等分词碎片）
 _STOP_HEAD = set("已使未超约逾再又将在于与及或被把从向至对为等之的了是有无不没更最很较且而并若如该此本某各每另共皆均即就也都还太挺颇经则方即必均")
-_STOP_TAIL = set("的了等之者性化率值元号称员长总们所")
+_STOP_TAIL = set("的了等之者性化率值元号称员长总们所续")
 
 # jieba 词性分词：名词性词性集合（参与"连续名词段"判定）
 _POSSEG_N_FLAGS = {"n", "nz", "ns", "nt", "nr", "nrt", "ng", "s", "j", "vn", "eng"}
@@ -473,10 +521,14 @@ def _posseg_candidates(t: str) -> list[tuple]:
                          max(_KW_POS_W.get(w.flag, 1.0) for w in seg) + 0.5, i)
             for k in range(len(seg) - 1):  # ③ 相邻 2 元拼接
                 a, b = seg[k].word, seg[k + 1].word
+                fa, fb = seg[k].flag, seg[k + 1].flag
+                # ★ 不跨人名拼接：把「研发」+「苏杰」拼成「研发苏杰」这类词，
+                #   做徽章既搜不到东西也读不懂（实测自 2026-11-05 东财标题）。
+                if fa.startswith("nr") or fb.startswith("nr"):
+                    continue
                 if len(a) >= 2 and len(b) >= 2 and len(a + b) <= 5:
                     _kw_push(cands, a + b,
-                             max(_KW_POS_W.get(seg[k].flag, 1.0),
-                                 _KW_POS_W.get(seg[k + 1].flag, 1.0)), i + k)
+                             max(_KW_POS_W.get(fa, 1.0), _KW_POS_W.get(fb, 1.0)), i + k)
             i = j
         else:
             i += 1
@@ -492,7 +544,9 @@ def _kw_of(title: str) -> str:
     t = re.sub(r"^((【[^【】]{1,16}】\s*)+)", "", title or "")
     t = re.sub(r"【(.*?)】", r"\1", t)
     for kw in _KW_SORTED:
-        if kw in t:
+        # ★ 关键词表里也有「美股/港股/中国」这类泛化词，命中了也跳过，
+        #   否则会盖掉后面的真实体（实测「随着美股下挫，恐慌指数VIX飙升」被标成【美股】）
+        if kw in t and kw not in _GENERIC_TAGS:
             return kw
     try:  # jieba 首次 import 约需 1s 建缓存，失败则静默走降级
         for _, _, _, w in _posseg_candidates(t):
@@ -504,7 +558,10 @@ def _kw_of(title: str) -> str:
         import jieba.analyse as _ja
         tags = _ja.extract_tags(t, topK=5)
         for tag in tags:
-            if 2 <= len(tag) <= 6 and not re.search(r"\d", tag) and tag not in _STOP_VERBS:
+            # ★ 这里以前只挡了动词，没挡泛化词：'现货钯金' 的 jieba 词性只有一个
+            #   「现货」(n)，被词性分支跳过后 TF-IDF 又把它捞了回来。
+            if (2 <= len(tag) <= 6 and not re.search(r"\d", tag)
+                    and tag not in _STOP_VERBS and tag not in _GENERIC_TAGS):
                 return tag
     except Exception:  # noqa: BLE001
         pass
@@ -521,10 +578,22 @@ def _stock_in(t: str, name_pairs: list[tuple[str, str]]) -> tuple | None:
 
 
 def _kw_target(kw: str, name_pairs: list[tuple[str, str]]) -> dict:
-    """单个关键词 → {kw, url}：为股票简称时跳同花顺个股页，否则 B 站搜索。"""
+    """单个关键词 → {kw, url}。
+
+    跳转分流（2026-11-05 调整）：
+      上市公司名      → 同花顺个股页
+      伦敦金/布伦特/原油 → 问财行情（保留原设计）
+      其余金融实体词   → 东方财富新闻搜索（原来一律跳 B 站，查「英伟达」得到的是视频）
+      非金融词        → B 站搜索（埃博拉、台风这类仍按学习向处理）
+    """
     for nm, code in name_pairs:
         if nm == kw or (len(nm) >= 2 and nm in kw):
             return {"kw": kw, "url": _stock_url(code)}
+    if kw in _GOLD_OIL_WORDS:
+        return {"kw": kw,
+                "url": f"https://www.iwencai.com/screener/result?w={quote(kw)}"}
+    if kw in _FIN_KW:
+        return {"kw": kw, "url": _em_url(kw)}
     return {"kw": kw, "url": _bili_url(kw)}
 
 
@@ -533,8 +602,14 @@ _INDEX_WORDS = sorted([   # 指数 / 大类资产词（长词优先，避免"恒
     "科创50", "沪深300", "中证500", "中证1000", "中证A500", "北证50", "创业板指", "科创板",
     "纳斯达克", "道琼斯", "标普500", "标普", "日经225", "日经", "恒生科技", "恒生指数", "恒生",
     "上证指数", "上证50", "深证成指", "伦敦金", "布伦特", "原油", "黄金", "白银", "碳酸锂",
-    "离岸人民币", "人民币汇率", "国债期货",
+    "离岸人民币", "人民币汇率", "国债期货", "恐慌指数", "VIX",
+    # 海外交易所 / 大宗机构简称（英文缩写，jieba 词性不稳，直接命中）
+    "LME", "COMEX", "NYMEX", "OPEC", "欧佩克", "EIA",
 ], key=len, reverse=True)
+
+# 金融类关键词全集（关键词表 + 指数/大类资产 + 海外实体）→ 跳东财资讯；
+# 不在这个集合里的（埃博拉、台风…）继续跳 B 站。
+_FIN_KW = set(KEYWORDS) | set(_INDEX_WORDS) | set(_ENTITY_WORDS)
 
 _NAME_SORTED = {"key": 0, "pairs": []}
 
@@ -594,7 +669,7 @@ def _classify(title: str, name_pairs: list[tuple[str, str]]) -> tuple[list[dict]
             hit = next(((c, nm) for nm, c in name_pairs if nm in view), None)
             if hit:
                 return [{"kw": hit[1], "url": _stock_url(hit[0])}], hit
-            return [{"kw": view[:8], "url": _bili_url(view[:8])}], _stock_in(t_body, name_pairs)
+            return [_kw_target(view[:8], name_pairs)], _stock_in(t_body, name_pairs)
 
     # ②b 机构评级：『提高/上调/下调/维持 (对) XX (的) 评级』→ 被评对象为关键词
     m = re.search(r"(?:提高|上调|下调|维持|重申|首次)(?:对|给予|给)?\s*([\u4e00-\u9fa5A-Za-z0-9]{2,10}?)(?:的)?评级", t_body)
@@ -603,23 +678,26 @@ def _classify(title: str, name_pairs: list[tuple[str, str]]) -> tuple[list[dict]
         hit = next(((c, nm) for nm, c in name_pairs if nm in obj), None)
         if hit:
             return [{"kw": hit[1], "url": _stock_url(hit[0])}], hit
-        return [{"kw": obj, "url": _bili_url(obj)}], _stock_in(t_body, name_pairs)
+        return [_kw_target(obj, name_pairs)], _stock_in(t_body, name_pairs)
 
     # ②c 上市公司名（长名优先）
     hit = _stock_in(t_body, name_pairs)
     if hit:
         return [{"kw": hit[1], "url": _stock_url(hit[0])}], hit
 
-    # ②d 指数 / 大类资产词（伦敦金/布伦特/原油豁免跳问财行情，其余跳 B 站）
+    # ②c2 海外/非 A 股重要实体（jieba 会切碎这类专名，先按词表命中）
+    for w in _ENTITY_WORDS:
+        if w in t_body:
+            return [_kw_target(w, name_pairs)], None
+
+    # ②d 指数 / 大类资产词（金融词走东财资讯，金油词走问财行情）
     for w in _INDEX_WORDS:
         if w in t_body:
-            url = (f"https://www.iwencai.com/screener/result?w={w}"
-                   if w in _GOLD_OIL_WORDS else _bili_url(w))
-            return [{"kw": w, "url": url}], None
+            return [_kw_target(w, name_pairs)], None
 
-    # ②e 兜底：关键词表 / jieba 实体词 → B 站
+    # ②e 兜底：关键词表 / jieba 实体词
     kw = _kw_of(title)
-    return [{"kw": kw, "url": _bili_url(kw)}], None
+    return [_kw_target(kw, name_pairs)], None
 
 
 # ============ 组装 ============
@@ -670,8 +748,8 @@ def build_items(cfg: dict | None = None) -> dict:
     for it in news:
         if len(items) >= limit + (1 if market_used else 0):
             break
-        if not it["url"]:
-            continue  # 无链接的新闻在轮播里没有跳转意义（财联社兜底源才有此情况）
+        # ★ 2026-11-05：无原文链接的条目不再整条丢弃（财联社兜底源全部无链接，
+        #   旧逻辑会让轮播一条新闻都不剩）。保留为纯文本，前端按 url 是否为空降级渲染。
         kws, stock_hit = _classify(it["title"], name_pairs)
         # 正文去掉头部全部【】标签（关键词已进徽章，正文更干净不重复）
         body = re.sub(r"^((【[^【】]{1,16}】\s*)+)", "", (it["text"] or it["title"])).strip()

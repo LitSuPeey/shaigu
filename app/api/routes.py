@@ -614,7 +614,8 @@ def conditions_run(req: ConditionReq):
                             sectors=req.sectors,
                             max_workers=req.max_workers,
                             progress_cb=_task_progress)
-        return {"rows": clean_records(df.to_dict(orient="records"))}
+        return {"rows": clean_records(df.to_dict(orient="records")),
+                "effective": conditions.describe_cfg(req.cfg)}
     except TaskCancelled:
         return _cancelled_response()
     finally:
@@ -721,6 +722,7 @@ class BollFilterReq(BaseModel):
     filters: list[str] = []
     state_filter: str = "any"        # any / bull / strong
     min_bars: int = 120
+    boll: dict = {}                  # BOLL 阈值（前端从条件筛选页同步）；空=模块默认
 
 
 @router.post("/api/bollfilter/run")
@@ -747,12 +749,14 @@ def bollfilter_run(req: BollFilterReq):
         r = bollfilter.filter_codes(codes, keys,
                                     state_filter=req.state_filter or "any",
                                     min_bars=int(req.min_bars or 120),
+                                    boll=req.boll or None,
                                     progress_cb=_task_progress)
         return {"rows": clean_records(r["rows"]),
                 "market": r["state"],
                 "n_in": r["n_in"], "n_out": r["n_out"],
                 "n_missing": r["n_missing"],
                 "skipped_state": r["skipped_state"],
+                "params": r.get("params"),
                 "reason": r.get("reason"),
                 "note": "过滤器是「择时器」不是「增强器」：开启大盘门槛后胜率提升来自 beta，"
                         "超额 alpha 实测为负，请勿理解为「信号被增强了」。"}
