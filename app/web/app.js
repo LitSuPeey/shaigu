@@ -504,6 +504,7 @@ function switchTab(name, noPush) {
   if (panel) panel.classList.add('active');
   if (name === 'bili' && typeof initBili === 'function') initBili();
   if (name === 'beton' && typeof initBeton === 'function') initBeton();
+  if (name === 'idxhub' && typeof initIdxhub === 'function') initIdxhub();
 }
 
 function bindTabs() {
@@ -1215,7 +1216,7 @@ function r9Card(r, idx) {
     <div class="r9-head">
       <span class="r9-rank" title="排序名次">${r.rank}</span>
       <a href="#" class="stock-link code-link r9-code" data-code="${r.code}" title="快速查看 · 站内看K线">${r.code}</a>
-      <a href="${thsLink(r.code)}" target="_blank" rel="noopener noreferrer" class="stock-link name-link r9-name" title="详细查询 · 同花顺新窗口">${escHtml(r.name || '')}</a>
+      <a href="${thsLink(r.code)}" target="_blank" rel="noopener noreferrer" class="stock-link name-link r9-name" title="详细查询 · 同花顺新窗口">${escHtml(r.name || r.code || '')}</a>
       <span class="r9-pbadges">${plabels}</span>
       ${r9DimBadge(bestRow)}
       ${status}
@@ -3525,6 +3526,50 @@ function setSyncBtn(syncing) {
   b.classList.toggle('btn-stop', syncing);
   b.title = syncing ? '停止当前正在进行的拉取任务' : '按当前范围增量同步最新行情';
 }
+
+// ========= 通达信通道：easy-tdx =========
+// 与 akshare 链路并列的另一个数据源，不是"兜底"。
+// 节流 50ms/只 → 全市场约 5 分钟（akshare 约 30 分钟）。
+// 节流的目的不是"限制功能"，是不给对端服务器添麻烦；它不是合规手段——
+// 合规边界在数据用途（个人研究 vs 对外服务/再分发），不在这里。
+// 后端只 UPSERT TDX 返回的日期，不删本地行；复权基准不一致时自动缩放新数据。
+async function startTdxSync() {
+  const b = $('#btnTdxSync');
+  if (!b || b.disabled) return;
+  const okGo = confirm(
+    '通达信通道（TCP 直连）\n\n' +
+    '· 节流 50ms/只，全市场约 5 分钟（⬇ 同步数据约 30 分钟）\n' +
+    '· 只补日线（前复权），不删本地数据\n' +
+    '· 复权基准与本地不一致时自动对齐\n\n' +
+    '继续？');
+  if (!okGo) return;
+  const oldTxt = b.textContent;
+  b.disabled = true;
+  b.textContent = '⏳ TDX 同步中…';
+  try {
+    const r = await fetchJSON('/api/sync/tdx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exchange: rangeVal() })
+    }, 900000);
+    if (r && r.error) { alert('TDX 同步失败：' + r.error); return; }
+    const lines = [
+      '通达信通道同步完成',
+      `成功 ${r.ok} 只 · 跳过 ${r.skipped}（无数据）· 写入失败 ${r.failed}`,
+      `耗时 ${r.elapsed}s（${r.speed} 只/秒），共写入 ${r.rows} 行`,
+    ];
+    if (r.n_aligned) lines.push(`其中 ${r.n_aligned} 只做了复权基准对齐（与本地库不一致）`);
+    if (r.errors && r.errors.length) lines.push('失败样例：' + r.errors.slice(0, 3).join('；'));
+    alert(lines.join('\n'));
+    if (typeof loadStatus === 'function') loadStatus();
+  } catch (e) {
+    alert('TDX 同步异常：' + (e && e.message ? e.message : e));
+  } finally {
+    b.disabled = false;
+    b.textContent = oldTxt;
+  }
+}
+
 async function startSync() {
   if (state.syncing) {   // 同步中 → 变成「停止」
     const b = $('#btnSync');
@@ -3763,6 +3808,7 @@ async function init() {
     });
   $('#similarCode').addEventListener('keydown', e => { if (e.key === 'Enter') runSimilar(); });
   $('#btnSync').addEventListener('click', startSync);
+  { const tb = $('#btnTdxSync'); if (tb) tb.addEventListener('click', startTdxSync); }
   initDivTiming();   // 分红时点预测面板（绑定按钮，懒加载数据）
   $('#freshTipClose').addEventListener('click', () => { $('#freshTip').hidden = true; });
   $('#freshTipSync').addEventListener('click', () => {

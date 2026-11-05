@@ -42,10 +42,12 @@ DEFAULTS: dict = {
 SOURCES: dict = {
     "ths830000": "平均股价 830000（同花顺）",
     "399317": "国证A指 399317（全市场 · 腾讯月K）",
+    "000300": "沪深300 000300（腾讯月K）",
     "000985": "中证全指 000985（腾讯月K）",
     "000001": "上证指数 000001（腾讯月K）",
 }
-_TENCENT_CODE = {"399317": "sz399317", "000985": "sh000985", "000001": "sh000001"}
+_TENCENT_CODE = {"399317": "sz399317", "000300": "sh000300",
+                 "000985": "sh000985", "000001": "sh000001"}
 
 # 同花顺 830000 探测失败缓存：失败后 1 小时内直接走降级，
 # 避免每次点分析都空等探测超时（体验为"点了没反应/不可用"）
@@ -114,11 +116,28 @@ def _to_monthly(daily: pd.DataFrame) -> list[dict]:
 
 
 def _tencent_monthly(tcode: str) -> list[dict]:
-    """腾讯月K线（实测 399317 自 2003、000985 自 2012、000001 自 2000）。"""
-    url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
-           f"param={tcode},month,,,400,qfq")
-    r = _net_call(lambda: _sess().get(url, headers={"User-Agent": _UA}, timeout=15))
-    node = r.json().get("data", {}).get(tcode, {})
+    """腾讯月K线（实测 399317 自 2003、000985 自 2012、000001 自 2000）。
+
+    【2026-10-19】web.ifzq.gtimg.cn 被腾讯 WAF 整体拦截（501 拦截页 → JSON
+    解析报 "Expecting value"），改用 ifzq.gtimg.cn / proxy.finance.qq.com
+    双入口轮询（实测均正常）。"""
+    qs = f"appstock/app/fqkline/get?param={tcode},month,,,400,qfq"
+    j = None
+    last_err = None
+    for base in ("https://ifzq.gtimg.cn",
+                 "https://proxy.finance.qq.com/ifzqgtimg"):
+        try:
+            r = _net_call(
+                lambda b=base: _sess().get(f"{b}/{qs}",
+                                           headers={"User-Agent": _UA},
+                                           timeout=15))
+            j = r.json()
+            break
+        except Exception as e:  # noqa: BLE001 —— 换备用入口
+            last_err = e
+    if j is None:
+        raise RuntimeError(f"腾讯月K全部入口失败: {str(last_err)[:80]}")
+    node = j.get("data", {}).get(tcode, {})
     rows = node.get("qfqmonth") or node.get("month") or []
     # 行格式：[日期, 开, 收, 高, 低, 量, ...]
     out = []

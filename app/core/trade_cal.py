@@ -122,6 +122,48 @@ def last_finished_trade_date(now: datetime | None = None) -> str | None:
     return dates[i - 1] if i > 0 else None  # 严格早于今天的最近交易日
 
 
+def prev_trade_date(d) -> str | None:
+    """严格早于 d 的最近一个交易日（YYYY-MM-DD）。无日历 → None。
+
+    d 可为 'YYYY-MM-DD' 字符串或 date/datetime；d 本身是否是交易日均可
+    （bisect 定位后取前一项）。供「快照补最新一根」判定候选股使用。
+    """
+    dates = _load_dates()
+    if not dates:
+        return None
+    t = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+    i = bisect.bisect_left(dates, t)
+    return dates[i - 1] if i > 0 else None
+
+
+def spot_ready_date(now: datetime | None = None) -> str | None:
+    """实时行情快照（腾讯 qt 等）当前所代表的「静态收盘交易日」；盘中/不确定 → None。
+
+    与 last_finished_trade_date 的口径区别：后者按**日线接口**的保守更新延迟
+    （20:00 阈值）判定；实时快照接口在 15:00 收盘即定格为完整数据。本函数
+    只描述快照本身，**是否可用于补写日K由调用方另做对齐与连续性校验**
+    （见 sync._spot_backfill_daily 的三层防错）。
+
+    - 交易日 15:05 后 → 今日；交易日 9:00 前 → 上一交易日（快照仍显示昨收定格）
+    - 交易日 9:00~15:05（含集合竞价）→ None（盘中未定格）
+    - 非交易日全天 → 最近交易日（严格早于今天）
+    """
+    dates = _load_dates()
+    if not dates:
+        return None
+    now = now or datetime.now()
+    t = now.strftime("%Y-%m-%d")
+    i = bisect.bisect_left(dates, t)
+    if not (i < len(dates) and dates[i] == t):   # 今天非交易日 → 快照=最近收盘日
+        return dates[i - 1] if i > 0 else None
+    hhmm = now.hour * 100 + now.minute
+    if hhmm < 900:                                # 盘前：快照=上一交易日定格
+        return dates[i - 1] if i > 0 else None
+    if hhmm >= 1505:                              # 收盘后：快照=今日完整数据
+        return t
+    return None                                   # 盘中（含竞价）：未定格
+
+
 def is_stale(local_max: str | None, now: datetime | None = None) -> bool:
     """本地最新日期是否落后于最近已完成交易日。local_max 为 None / 日历降级 → False。"""
     if not local_max:

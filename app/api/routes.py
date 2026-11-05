@@ -5,17 +5,19 @@ import math
 import os
 import re
 import sqlite3
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
 from ..core import db as core_db
+from ..core import tdx
 from ..core import ranges
 from ..core import sync as core_sync
 from ..modules import (alert, ant, ant1000, antsim, beton, bili, bollfilter, conditions,
-                       cycle, futures, pattern, reverse9, similar, snap, strategies, ticker)
+                       cycle, futures, idxhub, monitor, pattern, reverse9, similar, snap,
+                       strategies, ta, ticker)
 
 router = APIRouter()
 
@@ -221,6 +223,63 @@ def _build_snapshot_task():
 @router.get("/api/sync/progress")
 def sync_progress():
     return core_sync.STATE.snapshot()
+
+
+# ============ easy-tdx 快速同步（可选通道，缺库自动降级）============
+class TdxSyncReq(BaseModel):
+    codes: list[str] = []
+    count: int = 400
+    dry_run: bool = False
+    exchange: Optional[str] = None
+    sectors: Optional[list[str]] = None
+    # 节流间隔（毫秒）。★夹逼到 [80, 2000]：不允许传 0 绕过节流，
+    # 这个通道是备选，不能在正常流程里被"调快"
+    interval_ms: int = 50
+
+
+@router.get("/api/sync/tdx/status")
+def tdx_sync_status():
+    """easy-tdx 是否可用 + 安装指引。"""
+    return _clean(tdx.status())
+
+
+@router.post("/api/sync/tdx")
+def tdx_sync(req: TdxSyncReq):
+    """【备用通道】用通达信 TCP 协议批量补日线（前复权）。
+
+    定位：**只在主通道失败或明显过慢时使用**。默认节流 50ms/只（全市场约 6.5 分钟），
+    比 akshare 链路快但不会把服务器打出异常流量画像。
+    · 只 UPSERT TDX 返回的日期，不删本地行；
+    · 复权基准与本地不一致时自动缩放新数据（不动历史）；
+    · codes 为空则跑 conditions 的股票池口径（剔 ST / 次新）。
+    """
+    codes = [str(c) for c in (req.codes or []) if c]
+    if not codes:
+        try:
+            _d = conditions.DEFAULTS
+            codes, _st = conditions.load_universe(
+                _norm_exchange(req.exchange), req.sectors,
+                exclude_st=bool(_d.get("EXCLUDE_ST", True)),
+                new_stock_days=int(_d.get("NEW_STOCK_DAYS", 365)))
+        except Exception as e:                  # noqa: BLE001
+            return {"ok": 0, "error": f"取股票池失败：{type(e).__name__}: {e}"}
+    if not codes:
+        return {"ok": 0, "error": "股票池为空（先同步基础数据）"}
+
+    _task_start("TDX 快速同步")
+    try:
+        iv = max(40, min(2000, int(req.interval_ms or 50)))
+        r = tdx.sync_daily(codes, count=int(req.count or 400),
+                           progress_cb=_task_progress,
+                           dry_run=bool(req.dry_run),
+                           interval_ms=iv)
+        return _clean(r)
+    except TaskCancelled:
+        return _cancelled_response()
+    except Exception as e:                      # noqa: BLE001
+        return {"ok": 0, "error": f"TDX 同步失败：{type(e).__name__}: {str(e)[:200]}"}
+    finally:
+        _task_done()
 
 
 # ============ 分红/财报时点预测 ============
@@ -699,6 +758,89 @@ def bollfilter_run(req: BollFilterReq):
                         "超额 alpha 实测为负，请勿理解为「信号被增强了」。"}
     except TaskCancelled:
         return _cancelled_response()
+    finally:
+        _task_done()
+
+
+# ============ 技术分析 · 多维度技术面评分 + 信号事件回测 ============
+class TaReq(BaseModel):
+    code: str = ""
+    cfg: dict = {}
+    do_cross: bool = True        # 是否做「最近一个月相似技术形态」横截面回测
+    do_score_bt: bool = True     # 是否做评分分档有效性检验
+    regime: str = "auto"         # auto / bull / bear / range（市场背景，手动指定只换解释口径）
+
+
+@router.get("/api/ta/meta")
+def ta_meta():
+    """维度权重、信号清单、市场状态标定表（前端懒加载）。"""
+    return _clean(ta.meta_info())
+
+
+@router.get("/api/ta/regime")
+def ta_regime(asof: Optional[str] = None):
+    """当前市场状态（牛/熊/震荡）+ 判据数值 + 持续天数 + 该状态下的维度 IC。
+
+    首次调用要建全市场等权指数（约 1~3s），之后走进程内缓存。
+    """
+    return _clean(ta.detect_regime(asof=asof))
+
+
+@router.post("/api/ta/run")
+def ta_run(req: TaReq):
+    """单只股票的技术面评分 + 个股历史回测 + （可选）横截面回测。
+
+    耗时：纯个股约 0.1s；带横截面全市场扫描约 14s（5554 只 × 180 根）。
+    """
+    code = str(req.code or "").strip()
+    if not code:
+        return {"ok": False, "reason": "请填写股票代码"}
+    cfg = dict(req.cfg or {})
+    cfg["DO_CROSS"] = bool(req.do_cross)
+    cfg["DO_SCORE_BT"] = bool(req.do_score_bt)
+    _task_start("技术分析")
+    try:
+        r = ta.run(code, cfg, progress_cb=_task_progress, regime=req.regime or "auto")
+        return _clean(r)
+    except TaskCancelled:
+        return _cancelled_response()
+    except Exception as e:                      # noqa: BLE001
+        # ★返回可读 JSON 而不是让它冒成 500：前端才能显示「哪里失败了」
+        return {"ok": False, "code": code,
+                "reason": f"技术分析失败：{type(e).__name__}: {e}"}
+    finally:
+        _task_done()
+
+
+class TaRankReq(BaseModel):
+    cfg: dict = {}
+    exchange: Optional[str] = None
+    sectors: Optional[list[str]] = None
+    metric: str = "auto"         # auto=按市场状态 / balance / rebound
+    regime: str = "auto"         # auto / bull / bear / range
+    top: int = 10
+
+
+@router.post("/api/ta/rank")
+def ta_rank(req: TaRankReq):
+    """扫描指定范围，按评分取前 N 名（同分并列，返回条数可能 > N）。
+
+    metric="auto" 时由市场状态决定用哪把尺子（熊市→反抽分，牛/震荡→均衡分）。
+    耗时：全市场约 11~18s（只算评分不跑回测）；同范围 10 分钟内走缓存。
+    """
+    _task_start("技术评分排行")
+    try:
+        r = ta.rank_top(req.cfg, _norm_exchange(req.exchange), req.sectors,
+                        metric=req.metric or "auto",
+                        top=int(req.top or 10),
+                        progress_cb=_task_progress,
+                        regime=req.regime or "auto")
+        return _clean(r)
+    except TaskCancelled:
+        return _cancelled_response()
+    except Exception as e:                      # noqa: BLE001
+        return {"ok": False, "rows": [], "n": 0,
+                "note": f"评分排行失败：{type(e).__name__}: {e}"}
     finally:
         _task_done()
 
@@ -1258,3 +1400,116 @@ def bili_archive():
 def bili_archive_clear(req: BiliArchiveClearReq):
     """清空本地存档：指定 uid 只清该 UP主，否则全清。"""
     return _clean(bili.clear_archive(req.uid or None))
+
+
+# ============ 盯盘（Watchtower）：单只/一组股票的盘面透视 ============
+class MonitorReq(BaseModel):
+    # codes 允许传字符串（"600519,300750"）或数组（["600519"]），两种前端都支持
+    codes: Any = None
+    cfg: dict = {}
+
+
+class MonitorWlReq(BaseModel):
+    name: str = ""
+    codes: Any = None
+
+
+@router.get("/api/monitor/meta")
+def monitor_meta():
+    """默认参数 / 席位分类规则 / 口径披露。前端首次进入页签时懒加载。"""
+    return _clean(monitor.meta_info())
+
+
+@router.post("/api/monitor/run")
+def monitor_run(req: MonitorReq):
+    """盯盘主入口：分时 + 席位 + 资金占比 + ETF + 技术面 + 关键节点 + 信号。"""
+    if core_sync.STATE.status == "running":
+        return {"ok": False, "err": "数据同步进行中，请等同步结束后再盯盘（避免抢占网络）",
+                "rows": [], "notes": []}
+    _task_start("盯盘")
+    try:
+        r = monitor.run(req.codes, req.cfg, progress_cb=_task_progress)
+        return _clean(r)
+    except TaskCancelled:
+        return _cancelled_response()
+    except Exception as e:  # noqa: BLE001 —— 返回可读错误而不是 500
+        return {"ok": False, "err": f"盯盘失败: {e}", "rows": [], "notes": [str(e)[:300]]}
+    finally:
+        _task_done()
+
+
+@router.get("/api/monitor/intraday")
+def monitor_intraday(code: str = "", days: int = 1):
+    """分时数据（懒加载：卡片展开时才拉）。days ∈ 1/3/5。"""
+    c = re.sub(r"^(sh|sz|bj)", "", str(code or "").strip().lower())
+    if not re.fullmatch(r"\d{6}", c):
+        return {"ok": False, "err": "代码需为 6 位数字（如 600519）", "points": []}
+    return _clean(monitor.fetch_intraday(c, days))
+
+
+@router.get("/api/monitor/quote")
+def monitor_quote(codes: str = ""):
+    """轻量刷新：只取实时价/涨跌/量比（前端定时轮询用，不打其它接口）。"""
+    lst = [x for x in re.split(r"[,，\s]+", str(codes or ""))
+           if re.fullmatch(r"\d{6}", x)]
+    if not lst:
+        return {"ok": False, "err": "没有有效代码", "quotes": {}}
+    lst = lst[:60]
+    return _clean({"ok": True, "quotes": monitor.fetch_quotes(lst),
+                   "phase": monitor.market_phase()})
+
+
+@router.get("/api/monitor/watchlist")
+def monitor_wl_list():
+    """已保存的盯盘组。"""
+    return _clean(monitor.watchlist_list())
+
+
+@router.post("/api/monitor/watchlist")
+def monitor_wl_save(req: MonitorWlReq):
+    """保存/覆盖同名盯盘组。"""
+    return _clean(monitor.watchlist_save(req.name, req.codes))
+
+
+@router.post("/api/monitor/watchlist/delete")
+def monitor_wl_delete(req: MonitorWlReq):
+    """删除盯盘组。"""
+    return _clean(monitor.watchlist_delete(req.name))
+
+
+# ============ 指数指标（Index Hub）：全球风险锚 × 中国资产期现结构 ============
+def _idx_busy():
+    """同步期间拒绝：这些数据源与同步共用网络，抢网会让两边都变慢。"""
+    return core_sync.STATE.status == "running"
+
+
+@router.get("/api/idxhub/meta")
+def idxhub_meta():
+    """口径披露：数据源、基差定义、历史标定方法。前端首次进入时懒加载。"""
+    return _clean(idxhub.meta_info())
+
+
+@router.get("/api/idxhub/panel")
+def idxhub_panel(force: int = 0):
+    """指数指标主入口：海外锚 + 境内现货 + 期指基差 + 联动信号 + 动态权重。
+
+    ★ 不用 _task_start（不弹全屏进度条）：本接口 ~3-6s，悬浮窗自己显示 loading；
+      若占用全局 running 状态会干扰其它页签的进度轮询。
+    """
+    if _idx_busy():
+        return {"ok": False, "err": "数据同步进行中，请等同步结束后再看（避免抢占网络）",
+                "hero": [], "signals": []}
+    try:
+        return _clean(idxhub.panel(force=bool(force)))
+    except Exception as e:  # noqa: BLE001 —— 返回可读错误而不是 500
+        return {"ok": False, "err": "指数指标加载失败: %s" % e,
+                "hero": [], "signals": [], "notes": [str(e)[:300]]}
+
+
+@router.get("/api/idxhub/kline")
+def idxhub_kline(key: str = "vix", days: int = 260):
+    """单指标日K（含 MA5/20/60），前端自绘 canvas。"""
+    try:
+        return _clean(idxhub.kline(key, days))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "K 线加载失败: %s" % e, "bars": []}

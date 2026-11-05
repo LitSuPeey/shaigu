@@ -10,6 +10,13 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+# ★ 进程级网络修复（2026-10-14）：必须在任何网络请求发生之前安装。
+#   解决两类实测问题（详见 app/core/netfix.py）：
+#   1) 行情域名 IPv6 优先 →本机 IPv6 通道异常 → 东财请求全量失败 → 拉数据巨慢；
+#   2) 从注入了 HTTP(S)_PROXY 终端启动时 requests 全量 ProxyError。
+from app.core import netfix as _netfix
+_netfix.install()
+
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles

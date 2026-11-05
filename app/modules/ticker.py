@@ -165,11 +165,19 @@ def _cci_item() -> dict | None:
 
     def _rows_from_tencent():
         def fetch():
-            r = _sess().get(
-                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-                "?param=sh000001,day,,,80,qfq",
-                headers={"User-Agent": _UA}, timeout=8)
-            return r.json()
+            # 【2026-10-19】web.ifzq.gtimg.cn 被腾讯 WAF 拦截（501 页 → JSON
+            # 解析失败）；改双入口轮询（ifzq 裸域 / proxy.finance 实测正常）
+            qs = "appstock/app/fqkline/get?param=sh000001,day,,,80,qfq"
+            last_err = None
+            for base in ("https://ifzq.gtimg.cn",
+                         "https://proxy.finance.qq.com/ifzqgtimg"):
+                try:
+                    return _sess().get(
+                        f"{base}/{qs}",
+                        headers={"User-Agent": _UA}, timeout=8).json()
+                except Exception as e:  # noqa: BLE001 —— 换备用入口
+                    last_err = e
+            raise last_err if last_err else RuntimeError("腾讯指数日K失败")
         j = _net_call(fetch)
         d = (j.get("data") or {}).get("sh000001") or {}
         days = d.get("qfqday") or d.get("day") or []

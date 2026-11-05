@@ -25,8 +25,14 @@ adata 的 kline 与本项目的东财直连是同一接口(EM push2his)，而本
      分红（近一年实测 12 条）——那才是真正的反向更新/数据丢失。
   C) 日K：当前 fallback 链 新浪(stock_zh_a_daily, 单位恒为股) → 腾讯
      (stock_zh_a_hist_tx, 单位不统一, 已加 _autofix_volume_unit 自洽校验)。
-     东财 push2his 目前被 WAF 整体封锁(~8h冷却)，故"东财批量快照补最新一根"
-     暂不可行，待解封后按既有验证方案再接入。
+     【2026-10-14 定位】此处"push2his 被 WAF 封锁"的归因实为 **IPv6 通道
+     异常**：该类行情域名解析 IPv6 优先，本机 IPv6 对它们"TCP 可连、HTTP
+     层被立即断连"（curl -6 Empty reply / -4 → 200 OK），urllib3 建立连接
+     后收到 EOF 不回退地址 → 逐股全量失败 → 熔断走慢源。已由 core.netfix
+     进程级强制 IPv4 修复，东财直连（日期下推，最快）恢复可用。原待办
+     「批量快照补最新一根」**已接入**：《2026-10-14 腾讯批量快照补最后一根》
+     （收盘静态窗口 + 三层校验，7 请求覆盖全市场，见 _spot_backfill_daily），
+     东财突发风控时日常同步也不再走慢源。
 
 口径统一（出口硬约束）：volume=股、amount=元、turnover=小数、outstanding=股。
 历史曾两次踩坑：①成交额误×100 ②腾讯「手」当「股」写库(量小100倍)，均会让
@@ -48,6 +54,12 @@ from typing import Callable, Optional
 import pandas as pd
 
 from . import db, ranges
+from . import netfix as _netfix
+
+# ★ 进程级网络修复（2026-10-14）：IPv6 通道异常 + 终端注入的代理变量都会让
+#   本模块的数据源请求失败 → 熔断 → 全走逐股慢源（"拉取数据很慢"的根因）。
+#   详见 netfix 模块 docstring 的实测记录。幂等；main.py 顶部也会调用（双保险）。
+_netfix.install()
 
 _log = _logging.getLogger("sync")
 logging = _log  # alias
@@ -302,6 +314,194 @@ def fetch_spot(timeout: int = 15) -> pd.DataFrame:
     return _norm(df)
 
 
+# ========== 腾讯批量快照补最新日K（2026-10-14 新增） ==========
+# 背景：①东财 push2 系列存在突发风控（2026-10-14 实测：批量测试后 push2his /
+# push2 被整体断连数十分钟，datacenter-web 不受影响）；②逐股拉「最新一根」
+# 需全市场 5500+ 请求。腾讯批量快照 7 请求覆盖全市场（实测 ~1s），且与新浪
+# 逐值互证一致（OHLC/昨收分毫不差）；成交量单位不统一（主板=手、科创板=股）
+# → 自洽判定。仅补「恰好缺最后一根」的股票，三层防错见 _spot_backfill_daily。
+_TX_SPOT_IDX = {"代码": 2, "最新价": 3, "昨收": 4, "今开": 5, "成交量": 6,
+                "最高": 33, "最低": 34, "成交额万": 37, "换手率": 38}
+_TX_SPOT_BATCH = 800
+
+
+def _tx_spot_symbol(code: str) -> str:
+    """6 位代码 → 腾讯行情前缀（北交所先判，防 920 等被误判为沪市）。"""
+    c = str(code).zfill(6)
+    if c.startswith(("43", "83", "87", "88", "92")):
+        return "bj" + c
+    return ("sh" if c[0] in ("6", "9") else "sz") + c
+
+
+def _fetch_tx_spot_all(codes: list, workers: int = 4, timeout: int = 15) -> dict:
+    """腾讯批量快照（800 只/请求，分批并发）。返回 {6位代码: 原始字段列表}；
+    整体失败返回 {}（调用方静默回退逐股，不打断同步）。"""
+    import concurrent.futures as _cf_spot
+    import requests as _rq_spot
+    out: dict = {}
+    chunks = [list(codes[i:i + _TX_SPOT_BATCH])
+              for i in range(0, len(codes), _TX_SPOT_BATCH)]
+
+    def _one(chunk):
+        syms = ",".join(_tx_spot_symbol(c) for c in chunk)
+        r = _rq_spot.get("http://qt.gtimg.cn/q=" + syms,
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
+        r.encoding = "gbk"
+        rows = {}
+        for line in r.text.split(";"):
+            line = line.strip()
+            if not line.startswith("v_") or '="' not in line:
+                continue
+            f = line.partition('="')[2].rstrip('"').split("~")
+            if len(f) <= max(_TX_SPOT_IDX.values()):
+                continue
+            rows[str(f[_TX_SPOT_IDX["代码"]]).zfill(6)] = f
+        return rows
+
+    try:
+        with _cf_spot.ThreadPoolExecutor(max_workers=workers) as ex:
+            for rows in ex.map(_one, chunks):
+                out.update(rows)
+    except Exception as e:  # noqa: BLE001
+        _log.warning(f"腾讯批量快照失败: {e}")
+        return {}
+    return out
+
+
+def _spot_to_daily_bar(fields: list) -> Optional[dict]:
+    """腾讯快照字段 → 当日日K bar；不可用返回 None（调用方跳过该股走逐股）。
+
+    口径：volume=股、amount=元、turnover=小数、outstanding_share=股（与库内一致）。
+    成交量单位自洽判定：ratio = 成交额(元)/(原始量×现价)：
+      ≈1   → 原始量已是「股」（实测科创板 688 为股）
+      ≈100 → 原始量为「手」→ ×100（实测沪/深主板、创业板为手）
+      其他 → 灰色地带，判定不可靠 → None（交回逐股路径）。
+    停牌（量=0）/无成交/新股（昨收、开盘为 0）→ None。
+    """
+    def _num(v):
+        try:
+            return float(v)
+        except Exception:  # noqa: BLE001
+            return None
+
+    price = _num(fields[_TX_SPOT_IDX["最新价"]])
+    prev = _num(fields[_TX_SPOT_IDX["昨收"]])
+    op = _num(fields[_TX_SPOT_IDX["今开"]])
+    vol_raw = _num(fields[_TX_SPOT_IDX["成交量"]])
+    high = _num(fields[_TX_SPOT_IDX["最高"]])
+    low = _num(fields[_TX_SPOT_IDX["最低"]])
+    amount_wan = _num(fields[_TX_SPOT_IDX["成交额万"]])
+    turn_pct = _num(fields[_TX_SPOT_IDX["换手率"]])
+    if None in (price, prev, op, vol_raw, high, low, amount_wan):
+        return None
+    if min(price, prev, op, high, low, vol_raw, amount_wan) <= 0:
+        return None  # 停牌 / 新股 / 异常
+    amount = amount_wan * 1e4                     # 万元 → 元
+    base = vol_raw * price
+    ratio = amount / base if base > 0 else 0.0
+    if 0.5 <= ratio <= 2.0:
+        volume = vol_raw                          # 已是「股」
+    elif 50.0 <= ratio <= 200.0:
+        volume = vol_raw * 100.0                  # 「手」→ 股
+    else:
+        return None
+    turnover = None
+    if turn_pct is not None and turn_pct > 0:
+        turnover = turn_pct / 100.0               # % → 小数
+    out_share = (volume / turnover) if turnover else None
+    return {"open": op, "high": high, "low": low, "close": price,
+            "volume": volume, "amount": amount, "turnover": turnover,
+            "outstanding_share": out_share}
+
+
+def _spot_backfill_daily(conn, codes: list, last_daily: dict,
+                         last_trade: str | None, counters: dict,
+                         now=None) -> int:
+    """腾讯批量快照补「最后一根」日K（收盘静态窗口内）。
+
+    三层防错（任一不过 → 该股跳过，落回原逐股逻辑）：
+      1. 日期对齐：trade_cal.spot_ready_date() 必须 == last_trade（快照定格日
+         即本轮目标日；交易日 15:05~20:00 及盘中自动不满足 → 保持原语义）；
+         候选股 = 本地最新 == prev_trade_date(last_trade)（恰好只差一根）。
+      2. 数据自洽：快照内部 成交额/量/价 比值判定单位（≈1 股 / ≈100 手）。
+      3. 跨源连续：快照「昨收」与库内最新 close 一致（容差 1%；除权日/源
+         差异自动不通过 → 交回逐股）。
+    成功后更新 last_daily[c]=目标日 → _sync_one 对这些股零请求跳过 daily。
+    返回补写股票数；任何异常静默回退（不影响主流程）。
+    """
+    if not codes or not last_trade:
+        return 0
+    try:
+        from . import trade_cal as _tc
+        snap_date = _tc.spot_ready_date(now)
+        if not snap_date or snap_date != str(last_trade)[:10]:
+            return 0
+        prev_td = _tc.prev_trade_date(snap_date)
+        if not prev_td:
+            return 0
+        cand = [c for c in codes
+                if (ld := last_daily.get(c)) is not None
+                and _iso(ld) == prev_td]
+        if not cand or _cancelled():
+            return 0
+        STATE.cb(0, len(cand),
+                 f"快照补 {snap_date} 日K（{len(cand)} 只，腾讯批量）…")
+        spot = _fetch_tx_spot_all(cand)
+        if not spot:
+            return 0
+        # 库内最新 close 批量预取（用于「昨收」连续性校验）
+        prev_close: dict = {}
+        try:
+            for c, cl in conn.execute(
+                    "SELECT code, close FROM daily WHERE date=?", (prev_td,)):
+                if c in spot and cl is not None:
+                    prev_close[c] = float(cl)
+        except Exception as e:  # noqa: BLE001
+            _log.warning(f"快照补K：昨收预取失败（回退逐股）: {e}")
+            return 0
+        n_ok = n_skip = 0
+        for c in cand:
+            if _cancelled():
+                break
+            f = spot.get(c)
+            pc = prev_close.get(c)
+            if not f or pc is None:
+                n_skip += 1
+                continue
+            bar = _spot_to_daily_bar(f)
+            if bar is None:
+                n_skip += 1
+                continue
+            snap_prev = float(f[_TX_SPOT_IDX["昨收"]])
+            if pc <= 0 or abs(pc / snap_prev - 1.0) > 0.01:
+                n_skip += 1          # 除权日 / 源差异 → 交回逐股
+                continue
+            try:
+                df = pd.DataFrame([{
+                    "date": pd.Timestamp(snap_date),
+                    "open": bar["open"], "high": bar["high"],
+                    "low": bar["low"], "close": bar["close"],
+                    "volume": bar["volume"], "amount": bar["amount"],
+                    "turnover": bar["turnover"],
+                    "outstanding_share": bar["outstanding_share"],
+                }])
+                with db.write_lock():
+                    _upsert_daily(conn, c, df)
+            except Exception as e:  # noqa: BLE001
+                n_skip += 1
+                _log.warning(f"快照补K写入失败 {c}: {e}")
+                continue
+            last_daily[c] = datetime.strptime(snap_date, "%Y-%m-%d").date()
+            n_ok += 1
+        counters["daily_spot"] = counters.get("daily_spot", 0) + n_ok
+        _log.info(f"快照补 {snap_date} 日K：成功 {n_ok} / 跳过 {n_skip} / "
+                  f"候选 {len(cand)}")
+        return n_ok
+    except Exception as e:  # noqa: BLE001
+        _log.warning(f"快照补日K整体失败（回退逐股）: {e}")
+        return 0
+
+
 def fetch_listing_dates(timeout: int = 15) -> dict:
     """{6位代码: datetime.date}（上交所/深交所/北交所官方）。"""
     mapping = {}
@@ -404,6 +604,8 @@ def _em_sess():
 
 # ---- 东财 K线熔断器：东财偶发断连/限流（RemoteDisconnected），连续失败后
 # 本轮直接跳过东财走兜底源，避免每股白等超时；冷却后自动恢复尝试 ----
+# 【2026-10-14 定位】"偶发断连"的根因是 IPv6 通道异常（见文件头 C 段与
+# core.netfix）；强制 IPv4 后该熔断应极少触发，保留作为网络抖动兜底。
 _EM_KLINE = {"fails": 0, "blocked_until": 0.0}
 _EM_KLINE_LOCK = threading.Lock()
 _EM_KLINE_MAX_FAILS = 6     # 连续失败阈值
@@ -521,17 +723,94 @@ def _autofix_volume_unit(df: pd.DataFrame, code: str) -> pd.Series:
     return vol
 
 
+def _fetch_daily_ifzq(code: str, start_date: date, end_date: date,
+                      timeout: int = 10) -> Optional[pd.DataFrame]:
+    """腾讯 ifzq 日K直连（qfq 前复权）——东财失败后的快速第一降级源。
+
+    【2026-10-14 实测标定】
+    - 60 只样本 × 2 交易日与库内（东财口径）OHLC 全等、量双单位自洽 → 复权
+      口径与库内一致，可直接写入；
+    - 单只 ~0.37s（vs akshare 新浪 ~1.3s / akshare 腾讯 ~1.0s）；
+    - **无 amount 列**（由量×收盘估算，_normalize 兜底；误差=均价与收盘差，通常 <1%）；
+    - **成交量单位不统一**（主板=手、科创板=股）：用同响应内 qt 行情串的
+      「成交额/(量×价)」比值判定（≈1 股 / ≈100 手，与 _spot_to_daily_bar 同判据）；
+      判定失败或响应为空 → 抛异常退回后续慢源（宁慢勿错）。
+    - 「当日」K线更新有延迟（收盘后部分股票要等）——补最新一根优先走腾讯
+      批量快照（_spot_backfill_daily），本函数用于历史缺口加速。
+    """
+    import requests as _rq_tq
+    sym = _tx_spot_symbol(code)
+    payload = None
+    last_err = None
+    # 【2026-10-19】web.ifzq.gtimg.cn 被腾讯 WAF 整体拦截（返回 501 拦截页，
+    # JSON 解析必炸）。实测 ifzq.gtimg.cn 与 proxy.finance.qq.com/ifzqgtimg
+    # 两个入口均正常 → 主备双域名轮询，任一成功即用。
+    for _base in ("https://ifzq.gtimg.cn",
+                  "https://proxy.finance.qq.com/ifzqgtimg"):
+        try:
+            r = _rq_tq.get(
+                f"{_base}/appstock/app/fqkline/get",
+                params={"param": f"{sym},day,{start_date.strftime('%Y-%m-%d')},"
+                                 f"{end_date.strftime('%Y-%m-%d')},640,qfq"},
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
+            r.raise_for_status()
+            payload = r.json()
+            break
+        except Exception as e:  # noqa: BLE001 —— 换备用入口
+            last_err = e
+    if payload is None:
+        raise RuntimeError(f"ifzq({code}) 全部入口失败: {str(last_err)[:80]}")
+    d = ((payload.get("data") or {}).get(sym) or {})
+    kl = d.get("qfqday") or d.get("day") or []
+    if not kl:
+        raise RuntimeError(f"ifzq({code}) 空响应")
+    # ---- 成交量单位判定（参照同响应 qt：q[6]=量  q[37]=成交额(万元)）----
+    vol_unit = None
+    try:
+        q = (d.get("qt") or {}).get(sym) or []
+        q_price, q_vol = float(q[3]), float(q[6])
+        q_amt = float(q[37]) * 1e4
+        base = q_vol * q_price
+        ratio = q_amt / base if base > 0 else 0.0
+        if 0.5 <= ratio <= 2.0:
+            vol_unit = "share"
+        elif 50.0 <= ratio <= 200.0:
+            vol_unit = "lot"
+    except Exception:  # noqa: BLE001
+        vol_unit = None
+    if vol_unit is None:
+        raise RuntimeError(f"ifzq({code}) 成交量单位无法判定")
+    rows = []
+    for k in kl:
+        if len(k) < 6:
+            continue
+        rows.append({"date": k[0], "open": k[1], "close": k[2],
+                     "high": k[3], "low": k[4], "volume": k[5]})
+    if not rows:
+        raise RuntimeError(f"ifzq({code}) 无有效行")
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    for c in ("open", "close", "high", "low", "volume"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=["date", "close"])
+    if vol_unit == "lot":
+        df["volume"] = df["volume"] * 100.0       # 手 → 股（出口恒为股）
+    df = df[(df["date"].dt.date >= start_date)
+            & (df["date"].dt.date <= end_date)]
+    return df.sort_values("date").reset_index(drop=True) if len(df) else None
+
+
 def fetch_daily(code: str, start_date: date, end_date: date,
                 timeout: int = 10) -> Optional[pd.DataFrame]:
     """日K线（前复权），返回 DataFrame 或 None。
 
-    源优先级（2026-09-07 实测标定）：
+    源优先级（2026-10-14 更新）：
     1. 东财直连（日期下推+纯JSON，最快；f56 单位为手，函数内已 ×100）
-    2. 新浪 stock_zh_a_daily（1.30s/股；实测 10 只样本自洽比恒为 1.00，
-       单位稳定为「股」，且原生提供流通股本 → 首选兜底）
-    3. 腾讯 stock_zh_a_hist_tx（0.98s/股；**单位不统一**：深市主板 000/001
-       开头返回「手」，其余返回「股」，实测 000001 自洽比 100.17、
-       600519 为 0.997 → 只能靠自洽校验动态判定，故降为最后兜底）
+    2. 腾讯 ifzq 直连（0.37s/股；qfq 复权口径与库内全等[60 只×2 日实测]；
+       量单位由响应内 qt 自洽判定、失败自动继续降级；无 amount → 估算）
+       —— 新增：东财突发风控（实测会被整体断连数十分钟）时的快速降级
+    3. 新浪 stock_zh_a_daily（1.30s/股；单位恒为「股」、原生流通股本 → 最全兜底）
+    4. 腾讯 stock_zh_a_hist_tx（0.98s/股；单位不统一，自洽校验动态判定，最后兜底）
 
     【口径统一】出口恒为：volume=股、amount=元、turnover=小数、
     outstanding_share=股。历史上一版曾把成交额误乘 100、另一版又把腾讯
@@ -596,6 +875,19 @@ def fetch_daily(code: str, start_date: date, end_date: date,
         else:
             return None
     except Exception:
+        pass
+
+    # ★ 腾讯 ifzq 直连（2026-10-14 新增）：东财失败后的快速第一降级。
+    #   实测 ~0.37s/只（vs 新浪 1.3s）；复权/量口径已标定（见 _fetch_daily_ifzq）；
+    #   单位判定失败/空响应 → 自动继续降级（宁慢勿错）。东财突发风控期间
+    #   把「逐股补齐历史缺口」的耗时缩短约 3 倍。
+    try:
+        tq = _fetch_daily_ifzq(code, start_date, end_date, timeout=timeout)
+        if tq is not None and len(tq):
+            norm = _normalize(tq)
+            if norm is not None and len(norm):
+                return norm
+    except Exception:  # noqa: BLE001
         pass
 
     # (取数函数, 成交量单位标定) —— 标定依据见 fetch_daily 文档。
@@ -1597,6 +1889,7 @@ def _sync_all_impl(
                     conn.commit()
         counters = {"daily_new": 0, "daily_full": 0, "daily_none": 0,
                     "daily_fail": 0, "daily_skip": 0, "daily_bulk": 0,
+                    "daily_spot": 0,
                     "val_new": 0, "val_full": 0, "val_fail": 0, "val_skip": 0,
                     "val_bulk": 0,
                     "div_new": 0, "div_fail": 0, "div_none": 0, "div_bulk": 0,
@@ -1734,6 +2027,14 @@ def _sync_all_impl(
             except Exception as e:  # noqa: BLE001
                 _log.warning(f"估值批量预取异常，全部退回逐股: {e}")
                 bulk_val = None
+
+        # ---- 日K：腾讯批量快照补「最后一根」（2026-10-14 新增）----
+        # 东财 push2 突发风控 + 逐股 5500 请求的双重背景下，收盘静态窗口内用
+        # 腾讯批量快照（7 请求覆盖全市场，实测 ~1s，与新浪逐值互证一致）补
+        # 「恰好只差最后一根」的股票；三层防错见 _spot_backfill_daily docstring。
+        # 未命中条件时零副作用（直接返回），逐股逻辑原样兜底。
+        if "daily" in run_kinds and not force:
+            _spot_backfill_daily(conn, codes, last_daily, last_trade, counters)
 
         # ★ 停止同步检查点（估值批量阶段之后）：估值批量是准备阶段最重的一步
         if _cancelled():

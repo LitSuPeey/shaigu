@@ -1,43 +1,154 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page-node-id="nD6n3qvCKeX6ti0WHik6Ge">
-<head data-page-node-id="V4KyGGCH9PikAHrBlJv0RZ">
-<meta charset="UTF-8" data-page-node-id="eLtBu2fvS8mexF8aodyaTI" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="HZHv21P990FQbxSzkgsPhO" />
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0b0f">
 <title>筛股 · P的初航</title>
-<link rel="icon" href="/static/memes/开心.png" data-page-node-id="h5S4fImZ9ex9nwMlFxJezf" />
-<!-- 主题预设（在样式生效前落定 data-theme，避免闪白）：默认暗色 · 可切换 -->
+<link rel="icon" href="/static/memes/开心.png">
+<!-- 主题预设（样式生效前落定 data-theme，避免闪白） -->
 <script>try{var _t=localStorage.getItem('shaigu.theme');var _ok=['dark','light','pink','blue','beige'];document.documentElement.setAttribute('data-theme',_ok.indexOf(_t)>=0?_t:'dark');}catch(e){document.documentElement.setAttribute('data-theme','dark');}</script>
-<link rel="stylesheet" href="/static/style.css" data-page-node-id="Jvq5hm14eRlOdoYLEuSvI7" />
-<link rel="stylesheet" href="/static/bfilter.css" />
+<link rel="stylesheet" href="/static/style.css?v=20261101v6">
+<link rel="stylesheet" href="/static/bfilter.css?v=20261101v6">
+<link rel="stylesheet" href="/static/monitor.css?v=20261101v6">
+<link rel="stylesheet" href="/static/ta.css?v=20261101v6">
+<link rel="stylesheet" href="/static/idxhub.css?v=20261101v6">
+<link rel="stylesheet" href="/static/shell.css?v=20261101v6">
 </head>
-<body data-page-node-id="EBxfdp85zWoTtRAc6o5PIW">
+<body>
 
-<!-- ========= 顶栏 ========= -->
-<header class="topbar" data-page-node-id="sviLcHPVFbPS9o3r6LW2P2">
-  <div class="brand" data-page-node-id="ermAsHZuJt6kKHHH6zUJXw">
-    <img id="brandAvatar" class="brand-avatar" src="/static/memes/表情套组_默认_你好！.png" alt="hi" data-page-node-id="20ONb8hlFUtPAPUjHVHtE0" />
-    <div data-page-node-id="TKvFckwQHc8OLJN8sMgEia">
-      <h1 data-page-node-id="aDAFoylI6kqe76OmsSGJhr">筛股 <span class="brand-sub" data-page-node-id="NfBYAe3Jd6haE23wNgGonF">MaidenArknights</span></h1>
-      <div class="brand-tag" data-page-node-id="G5Aawl2fO7ZIruO6yjTV2k">P的初航 <img class="brand-meme" src="/static/memes/表情套组_默认_谢谢！.png" alt="thanks" data-page-node-id="brandThanks" /></div>
+<!-- 背景装饰（极光 + 网格） -->
+<div class="bg-deco" aria-hidden="true">
+  <i class="bg-orb o1"></i><i class="bg-orb o2"></i><i class="bg-orb o3"></i><i class="bg-grid"></i>
+</div>
+
+<div class="ix-flash" id="ixFlash" hidden>
+  <div class="ix-flash-bd" id="ixFlashBd"></div>
+  <div class="ix-flash-box" role="dialog" aria-modal="true" aria-label="全球风险快照">
+    <header class="ix-fb-head">
+      <div class="ix-fb-title">
+        <span class="ix-fb-dot" id="ixFlashDot"></span>
+        <b>全球风险快照</b>
+        <span class="ix-fb-sub" id="ixFlashSub">正在拉取数据…</span>
+      </div>
+      <div class="ix-fb-ops">
+        <button class="ix-btn ix-btn-ghost" id="ixFlashRefresh" title="重新抓取（跳过 45 秒缓存）">↻</button>
+        <button class="ix-btn ix-btn-main" id="ixFlashAnalyze" title="重新分析并跳到详细结果">⚡ 一键分析</button>
+        <button class="ix-btn" id="ixFlashGo">📊 进入指数指标</button>
+        <button class="ix-x" id="ixFlashClose" title="关闭（Esc）">✕</button>
+      </div>
+    </header>
+    <div class="ix-fb-body">
+      <div class="ix-hero" id="ixFlashHero"></div>
+      <div class="ix-banner" id="ixFlashBanner" hidden></div>
+      <div class="ix-temp" id="ixFlashTemp"></div>
+      <div class="ix-theme" id="ixFlashTheme" hidden></div>
+      <div class="ix-sec-title">🔍 今日联动信号</div>
+      <div class="ix-analysis" id="ixFlashSignals"></div>
+    </div>
+    <footer class="ix-fb-foot">
+      <span>VIX 为美东收盘（A 股开盘前已知，滞后一根） · A50 / 布伦特为连续合约 · 基差为主连口径</span>
+      <span style="margin-left:auto">风险温度只是环境读数，不是买卖信号</span>
+    </footer>
+  </div>
+</div>
+
+<div class="app" id="app">
+
+  <!-- ==================== 侧边栏 ==================== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <div class="brand">
+    <img id="brandAvatar" class="brand-avatar" src="/static/memes/表情套组_默认_你好！.png" alt="hi" />
+    <div>
+      <h1>筛股 <span class="brand-sub">MaidenArknights</span></h1>
+      <div class="brand-tag">P的初航 <img class="brand-meme" src="/static/memes/表情套组_默认_谢谢！.png" alt="thanks" /></div>
     </div>
   </div>
-  <div class="topbar-right" data-page-node-id="woK6nBzDIS06USOVhSQ4G1">
-    <div class="range-picker" id="rangePicker" title="先选股票范围，所有筛选都以此为基准" data-page-node-id="HMT3JFytUV2ijIeUZS8MAj">
-      <button data-range="all" class="active" data-page-node-id="1K6ftFcTtGh71AZ2vAFCZv">全部</button>
-      <button data-range="sh" data-page-node-id="ETCtP3ioeok2PpHbrMNQ4T">沪市</button>
-      <button data-range="sz" data-page-node-id="QLZiNKyzeVWDfWJxt39RTy">深市</button>
-      <button data-range="bj" data-page-node-id="Lxue6j1KBosU2lXDmrrmEs">北交所</button>
+      <button class="sb-toggle" id="sbToggle" title="折叠 / 展开侧栏（Ctrl+B）" aria-label="折叠侧栏">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
     </div>
-    <span class="range-badge" id="rangeBadge" data-page-node-id="EGnLJ0Ai4viV5kjAsallJN">全部</span>
-    <button class="btn btn-ghost" id="btnRefreshMeta" title="刷新股票列表与板块" data-page-node-id="OfUra06WTWYcxXu6DcOAYc">🔄 刷新信息</button>
-    <label class="sync-checkbox" title="是否同步估值水平数据（PE/PB），默认开启" data-page-node-id="syncOpt">
-      <input type="checkbox" id="syncWithValuation" checked />含估值
-    </label>
-    <label class="sync-checkbox" title="是否同步分红股息数据，默认开启" data-page-node-id="syncDivOpt">
-      <input type="checkbox" id="syncWithDividend" checked />含分红
-    </label>
-    <button class="btn btn-ghost" id="btnDivTiming" title="分红时点预测：按个股分红习惯，本周只需排查哪些股（可减少同步请求量）">🗓 分红时点</button>
-    <span class="theme-anchor">
+
+    <nav class="sb-nav" id="sbNav" aria-label="功能导航">
+<div class="sb-group" data-g="0">
+  <div class="sb-group-t"><span>选股工作台</span><em>SELECTION</em></div>
+  <button class="tab active" data-tab="condition" data-label="条件筛选" data-desc="15 个形态 / 估值 / 股息 / BOLL 条件自由组合" title="15 个形态 / 估值 / 股息 / BOLL 条件自由组合"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg></span><span class="tab-label">条件筛选</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="pattern" data-label="形态打分" data-desc="经典形态 + 短线快拍，按健康度打分" title="经典形态 + 短线快拍，按健康度打分"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 3 5-8 4 4"/></svg></span><span class="tab-label">形态打分</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="r9" data-label="9Reverse9" data-desc="神奇九转「即将到达买入九转」" title="神奇九转「即将到达买入九转」"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.2 5.6"/><path d="M20 5v6h-6"/></svg></span><span class="tab-label">9Reverse9</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="beton" data-label="Bet on" data-desc="年度级长期布局：买点档 / 评分 / 周期" title="年度级长期布局：买点档 / 评分 / 周期"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.2"/></svg></span><span class="tab-label">Bet on</span><span class="tab-kbd"></span></button>
+</div>
+<div class="sb-group" data-g="1">
+  <div class="sb-group-t"><span>机会雷达</span><em>RADAR</em></div>
+  <button class="tab" data-tab="ant" data-label="蚂蚁呀欸" data-desc="底部四层扫描 + 样本形态匹配" title="底部四层扫描 + 样本形态匹配"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18" cy="12" r="1.7"/><path d="M4 7.5h16M4 16.5h16"/></svg></span><span class="tab-label">蚂蚁呀欸</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="similar" data-label="相似股" data-desc="按历史走势找最像的股票" title="按历史走势找最像的股票"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v18M16 3v18"/><path d="M8 8.5h8M8 15.5h8"/></svg></span><span class="tab-label">相似股</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="alert" data-label="前瞻预警" data-desc="日历 / 潜伏 / 冷门 / 拥挤 / 产业链 / 宏观" title="日历 / 潜伏 / 冷门 / 拥挤 / 产业链 / 宏观"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8.5a6 6 0 1 0-12 0c0 6.5-3 6.5-3 8.5h18c0-2-3-2-3-8.5"/><path d="M10 20.5h4"/></svg></span><span class="tab-label">前瞻预警</span><span class="tab-kbd"></span></button>
+</div>
+<div class="sb-group" data-g="2">
+  <div class="sb-group-t"><span>市场罗盘</span><em>MACRO</em></div>
+  <button class="tab" data-tab="cycle" data-label="大周期" data-desc="通道位置与未来几年推演" title="通道位置与未来几年推演"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4l-2.1 5.1-5.1 2.1 2.1-5.1z"/></svg></span><span class="tab-label">大周期</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="futures" data-label="期货视察" data-desc="商品期货强弱与股市联动" title="商品期货强弱与股市联动"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v18M18 3v18M6 8h12M6 16h12"/></svg></span><span class="tab-label">期货视察</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="idxhub" data-label="指数指标" data-desc="VIX / A50 / 布伦特 / 恒生 + 基差" title="VIX / A50 / 布伦特 / 恒生 + 基差"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18"/></svg></span><span class="tab-label">指数指标</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="kline" data-label="行情查看" data-desc="站内 K 线工作站" title="站内 K 线工作站"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v16M18 4v16"/><rect x="3.2" y="8" width="5.6" height="6" rx="1.2"/><rect x="15.2" y="10" width="5.6" height="7" rx="1.2"/></svg></span><span class="tab-label">行情查看</span><span class="tab-kbd"></span></button>
+</div>
+<div class="sb-group" data-g="3">
+  <div class="sb-group-t"><span>深度工具</span><em>LAB</em></div>
+  <button class="tab" data-tab="ta" data-label="技术分析" data-desc="六维评分 + 形态回测" title="六维评分 + 形态回测"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15l12-12 6 6-12 12z"/><path d="M7.5 10.5l2 2M11 7l2 2M14.5 3.5l2 2"/></svg></span><span class="tab-label">技术分析</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="monitor" data-label="盯盘" data-desc="七维盘面透视" title="七维盘面透视"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"/><circle cx="12" cy="12" r="3"/></svg></span><span class="tab-label">盯盘</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="bfilter" data-label="数据过滤" data-desc="BOLL 过滤器 + 大盘状态闸" title="BOLL 过滤器 + 大盘状态闸"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5h17l-6.6 7.6V19l-3.8 2v-8.4z"/></svg></span><span class="tab-label">数据过滤</span><span class="tab-kbd"></span></button>
+</div>
+<div class="sb-group" data-g="4">
+  <div class="sb-group-t"><span>实验田</span><em>SANDBOX</em></div>
+  <button class="tab" data-tab="strategy" data-label="Sequoia" data-desc="海龟突破 / 均线放量 / 旗形整理" title="海龟突破 / 均线放量 / 旗形整理"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="M12 9L7 3.5M12 9l5-5.5M12 15l-4-4M12 15l4-4"/></svg></span><span class="tab-label">Sequoia</span><span class="tab-kbd"></span></button>
+  <button class="tab" data-tab="bili" data-label="仅供学习" data-desc="B 站 UP 主内容里的股票提及" title="B 站 UP 主内容里的股票提及"><span class="tab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5l9-4.2 9 4.2-9 4.2z"/><path d="M7 11.2v4.8c0 1.5 2.2 2.6 5 2.6s5-1.1 5-2.6v-4.8"/></svg></span><span class="tab-label">仅供学习</span><span class="tab-kbd"></span></button>
+</div>
+    </nav>
+
+    <div class="sb-foot">
+      <button class="sb-status" id="sbStatus" title="数据状态 · 点击查看详情">
+        <span class="sbs-dot" id="sbsDot"></span>
+        <span class="sbs-txt">
+          <b id="sbsMain">读取中…</b>
+          <em id="sbsSub">—</em>
+        </span>
+      </button>
+      <button class="sb-cmd" id="btnCmd" title="命令面板（Ctrl+K）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <span>快速跳转</span><kbd>Ctrl K</kbd>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ==================== 工作区 ==================== -->
+  <div class="workspace">
+
+    <header class="topbar">
+      <div class="tb-left">
+        <div class="crumb">
+          <span class="crumb-g" id="crumbGroup">选股工作台</span>
+          <span class="crumb-sep">/</span>
+          <b class="crumb-n" id="crumbName">条件筛选</b>
+        </div>
+        <div class="tb-status" id="tbStatus">
+          <span class="tbs-item" id="tbDataDate"><i class="dot"></i>数据 —</span>
+          <span class="tbs-item" id="tbRange"><i class="dot accent"></i>范围 全部</span>
+        </div>
+      </div>
+      <div class="tb-right">
+<div class="tb-core">
+<div class="range-picker" id="rangePicker" title="先选股票范围，所有筛选都以此为基准">
+      <button data-range="all" class="active">全部</button>
+      <button data-range="sh">沪市</button>
+      <button data-range="sz">深市</button>
+      <button data-range="bj">北交所</button>
+    </div>
+<span class="range-badge" id="rangeBadge" hidden>全部</span>
+</div>
+<div class="tb-actions">
+<button class="btn btn-primary" id="btnSync" title="按当前范围增量同步最新行情">⬇ 同步数据</button>
+<span class="theme-anchor">
       <button class="btn btn-ghost" id="btnTheme" title="外观调整（5 套主题 · 记忆选择）">🎨 外观</button>
       <!-- 外观调整面板：5 套主题，点击即切换 -->
       <div class="theme-pop" id="themePop" hidden>
@@ -64,116 +175,46 @@
         </button>
       </div>
     </span>
-    <button class="btn btn-primary" id="btnSync" title="按当前范围增量同步最新行情" data-page-node-id="BfAqODPTtUepiAfDA237rd">⬇ 同步数据</button>
-  </div>
-</header>
-
-<!-- ========= 分红时点预测面板 ========= -->
-<div class="divt-panel" id="divtPanel" hidden>
-  <div class="divt-head">
-    <strong>🗓 分红时点预测</strong>
-    <span class="divt-sub" id="divtSub">按个股历史分红习惯推断本周可能除权的股票，只对这些股查分红</span>
-    <button class="divt-close" id="divtClose" title="关闭">✕</button>
-  </div>
-  <div class="divt-body">
-    <div class="divt-controls">
-      <label>查看日期 <input type="date" id="divtDate" /></label>
-      <button class="btn btn-ghost" id="divtToday">本周</button>
-      <button class="btn btn-ghost" id="divtFull" title="规则d：每年2月底全市场增量（每年仅一次）">2月底全市场</button>
-      <span class="divt-flag" id="divtFlag"></span>
-    </div>
-    <div class="divt-stats" id="divtStats"></div>
-    <div class="divt-weeks" id="divtWeeks"></div>
-    <div class="divt-list-head">
-      <span>本周候选 <b id="divtCount">0</b> 只</span>
-      <span class="hint">仅影响「同步时查哪些股」，不改动任何本地历史数据</span>
-    </div>
-    <div class="divt-list" id="divtList"></div>
-  </div>
+<button class="btn btn-ghost tb-more-btn" id="tbMoreBtn" title="更多工具"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg><span>更多</span></button>
+<div class="tb-more-pop" id="tbMorePop" hidden>
+<button class="btn btn-ghost" id="btnRefreshMeta" title="刷新股票列表与板块">🔄 刷新信息</button>
+<button class="btn btn-ghost" id="btnDivTiming" title="分红时点预测：按个股分红习惯，本周只需排查哪些股（可减少同步请求量）">🗓 分红时点</button>
+<button class="btn btn-ghost" id="btnIdxFlash" title="打开全球风险快照（VIX / A50 / 布伦特 / 恒生 + 境内期现结构）">🌐 全球快照</button>
+<button class="btn btn-ghost" id="btnTdxSync" title="通达信 TCP 通道：补日线（前复权）。节流 50ms/只，全市场约 5 分钟；只覆盖 TDX 返回的日期，不删本地数据">⬇ TDX 同步</button>
+<label class="sync-checkbox" title="是否同步估值水平数据（PE/PB），默认开启">
+      <input type="checkbox" id="syncWithValuation" checked />含估值
+    </label>
+<label class="sync-checkbox" title="是否同步分红股息数据，默认开启">
+      <input type="checkbox" id="syncWithDividend" checked />含分红
+    </label>
 </div>
-
-<!-- ========= 同步进度 ========= -->
-<div class="sync-bar" id="syncBar" hidden data-page-node-id="L9tfHDTubqI5ohxfV1FQ0D">
-  <div class="sync-text" id="syncText" data-page-node-id="93CDZN1faJ8FIN2NiRivDA">同步中…</div>
-  <div class="sync-progress" data-page-node-id="vtN6rW5LBApbwwmCKqtD64"><div class="sync-progress-fill" id="syncFill" data-page-node-id="4MV52mcusCmFdX7z2DESmo"></div></div>
-  <button class="sync-toggle" id="syncToggle" data-page-node-id="A8sXv1fvl6DDmtJilO3Q0O">日志 ▾</button>
-  <div class="sync-logs" id="syncLogs" data-page-node-id="4kRMol2A9ZvUE5hEaxypoM"></div>
 </div>
+      </div>    </header>
 
-<!-- ========= 数据滞后提示（本地数据落后最近交易日时显示，一天最多一次） ========= -->
-<div class="fresh-tip" id="freshTip" hidden>
-  <span class="fresh-tip-text" id="freshTipText"></span>
-  <button class="fresh-tip-btn" id="freshTipSync">⬇ 立即同步</button>
-  <button class="fresh-tip-close" id="freshTipClose" title="今天不再提示">✕</button>
-</div>
-
-<!-- ========= 快讯轮播条 ========= -->
 <div class="ticker-bar" id="tickerBar" hidden>
   <span class="ticker-label">📡 快讯</span>
   <div class="ticker-viewport"><div class="ticker-track" id="tickerTrack"></div></div>
   <button class="ticker-refresh" id="tickerRefresh" title="刷新滚动字幕（跳过缓存重新拉取）">⟳</button>
 </div>
 
-<!-- ========= 主区 ========= -->
-<main class="main" data-page-node-id="Bcod7YkdNMyOo7WW96AiOC">
-  <nav class="tabs" data-page-node-id="oA5FYrVpKN7SZb8UKqMcWE">
-    <button class="tab active" data-tab="condition" data-page-node-id="FSHaYsCHJZjoWvMcE0Au0R">✅ 条件筛选</button>
-    <button class="tab" data-tab="pattern" data-page-node-id="R4ZNngAtZ1OH58P5MIzpUM">🪄 形态打分</button>
-    <button class="tab" data-tab="r9" title="9Reverse9：神奇九转「即将到达买入九转」筛选 + 历史反转时点 n/m 统计">🔁 9Reverse9</button>
-    <button class="tab" data-tab="beton" title="Bet on：年度级长期布局 —— 从长历史里找可能持续 1 年以上的上涨，给买点档 / 评分 / 周期时长 / 卖出量化纪律">🎯 Bet on</button>
-    <button class="tab" data-tab="ant" data-page-node-id="y3mbECoqiJ8rZdqj7UcKan">🐜 蚂蚁呀欸</button>
-    <button class="tab" data-tab="similar" data-page-node-id="DTrWi26ypoiDfsKr6nzSDs">🧬 相似股</button>
-    <button class="tab" data-tab="alert">⏰ 前瞻预警</button>
-    <button class="tab" data-tab="cycle">🧭 大周期</button>
-    <button class="tab" data-tab="futures">🛢 期货视察</button>
-    <button class="tab" data-tab="kline" data-page-node-id="vJA6zHoASTpmdy5wXkrOI7">📈 行情查看</button>
-    <button class="tab" data-tab="strategy" data-page-node-id="PbG4tAeqrF0wpNjvFTNEvo" title="来源于 GitHub 同名代码">🌲 Sequoia</button>
-    <button class="tab" data-tab="bili" title="仅供学习：B站指定UP主内容中的股票提及挖掘">🎓 仅供学习</button>
-    <button class="tab" data-tab="bfilter" title="BOLL 过滤器 · 大盘状态：给任意股票池叠加 BOLL 条件 + 市场环境闸（独立新功能，不影响其它页签）">🧫 数据过滤</button>
-  </nav>
+<div class="sync-bar" id="syncBar" hidden>
+  <div class="sync-text" id="syncText">同步中…</div>
+  <div class="sync-progress"><div class="sync-progress-fill" id="syncFill"></div></div>
+  <button class="sync-toggle" id="syncToggle">日志 ▾</button>
+  <div class="sync-logs" id="syncLogs"></div>
+</div>
+<div class="fresh-tip" id="freshTip" hidden>
+  <span class="fresh-tip-text" id="freshTipText"></span>
+  <button class="fresh-tip-btn" id="freshTipSync">⬇ 立即同步</button>
+  <button class="fresh-tip-close" id="freshTipClose" title="今天不再提示">✕</button>
+</div>
 
-  <!-- ===== Sequoia（原策略选股，置于末位） ===== -->
-  <section class="panel" id="tab-strategy" data-page-node-id="3UD9YcAHhCsLOu6XSFjTkX">
-    <div class="panel-head" data-page-node-id="xILmLXFs61CZMUHHw9vBXU">
-      <h2 data-page-node-id="lzKtE9HZxNWlOZ4YKv803A">🌲 Sequoia</h2>
-      <p data-page-node-id="m7EGOriSSe2thJLJsFh6Bl">海龟突破 · 均线放量 · 高旗形整理 · 涨停洗盘 · 上升跌停 · RPS 突破，可单跑或全部一起跑。</p>
-      <p class="src-note">来源于 GitHub 同名代码</p>
-    </div>
-    <div class="controls" data-page-node-id="hDfEwWsqBQHyPrv1dQUXyw">
-      <label data-page-node-id="K7n8edciyZgQo9Hn3flbIv">选择策略
-        <select id="strategyKey" data-page-node-id="iHkN05r9L35NsDOzl6hLyF"></select>
-      </label>
-      <label class="inline" data-page-node-id="hbuIP1a9ypdBI4RcJxlLGP">范围
-        <span class="range-badge" id="strategyRangeEcho" style="margin-left:0" data-page-node-id="0rccBRmvRQYne801p35DEA">跟随顶栏范围</span>
-      </label>
-    </div>
-    <details class="strategy-params" data-page-node-id="Lt7jH8gDDgMZmhQZxdLKrM">
-      <summary data-page-node-id="oKku4NsE9O4rPe0mIdjAgE">⚙ 高级参数（可选，留空用默认）</summary>
-      <div class="params-grid" id="strategyParamsGrid" data-page-node-id="UY2aBpDIVeJ1zmcwTpfo4d"></div>
-    </details>
-    <div class="actions" data-page-node-id="q41Oorhwk9NUxrZDkMj780">
-      <button class="btn btn-primary" id="btnRunStrategies" data-page-node-id="AjtDCPftVGqzYA11XGxH32">▶ 开始扫描</button>
-      <button class="btn btn-ghost" id="btnStrategyCsv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
-    </div>
-    <div class="result-meme" id="strategyMeme" hidden data-page-node-id="Khjcy7Ds5j67MmxojHBvmf">
-      <img src="" alt="meme" data-page-node-id="tpC8rH3EloVAu0rh3dg7Ay" />
-      <div class="result-meme-text" data-page-node-id="R2f2VV5IY1apYgF1E7gGta">
-        <div class="meme-big" data-page-node-id="rIXcnsaZwHUkjmcwmEzoJr"></div>
-        <div class="meme-sub" data-page-node-id="FIUksBDWv5P34F49H1Yvps"></div>
-      </div>
-    </div>
-    <div class="results" data-page-node-id="IxTGnpSUP21aCwVPq7VLqt">
-      <table class="result-table" id="strategyTable" data-page-node-id="gkoRdEWeWwmFa3Ag7HYD7x">
-        <thead data-page-node-id="oWHhZRcLj77XE6veokehQd"></thead><tbody data-page-node-id="tF01ojPXCwJ4Wqd2dpUbil"></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- ===== 条件筛选 ===== -->
-  <section class="panel active" id="tab-condition" data-page-node-id="ecjmaOPqu0dsxpO8xbYRvt">
-    <div class="panel-head" data-page-node-id="O6uEGAxF9eaJDyFYHI5ne6">
-      <h2 data-page-node-id="hbsugw71v0RVFQE6jelBg0">条件筛选</h2>
-      <p data-page-node-id="57T4vf1sJlaVWld1kspHdi">15 个形态 / 估值 / 股息 / 市场 / BOLL 条件，勾选多个取交集。</p>
+    <main class="main">
+      <div class="main-inner" id="mainInner">
+<section class="panel active" id="tab-condition">
+    <div class="panel-head">
+      <h2>条件筛选</h2>
+      <p>15 个形态 / 估值 / 股息 / 市场 / BOLL 条件，勾选多个取交集。</p>
     </div>
     <!-- 预设组合（一键套用条件 + 阈值，不挤占原布局，独立成条） -->
     <div class="cond-presets" id="condPresets">
@@ -186,13 +227,13 @@
       <div class="cp-slots" id="cpSlots"></div>
       <div class="cp-msg" id="cpMsg"></div>
     </div>
-    <div class="actions" style="margin-top:0" data-page-node-id="BHt8bImzudDSCnfxEmC5db">
-      <button class="btn btn-ghost" id="btnCondAll" data-page-node-id="NEvNrDTtYMnUJ3b1TDxRvd">全选</button>
-      <button class="btn btn-ghost" id="btnCondNone" data-page-node-id="o5P30GzTqiN6p6t8ucDQSE">清空</button>
-      <button class="btn btn-primary" id="btnRunCond" data-page-node-id="3fQNciKwAgildDH87yKUfK">▶ 按条件筛选</button>
+    <div class="actions" style="margin-top:0">
+      <button class="btn btn-ghost" id="btnCondAll">全选</button>
+      <button class="btn btn-ghost" id="btnCondNone">清空</button>
+      <button class="btn btn-primary" id="btnRunCond">▶ 按条件筛选</button>
     </div>
-    <div class="cond-grid" id="condGrid" data-page-node-id="3Lt18FVqa2dT1OQPyAKayw"></div>
-    <details class="adv-params" data-page-node-id="condAdvParams">
+    <div class="cond-grid" id="condGrid"></div>
+    <details class="adv-params">
       <summary>⚙ 阈值参数（可调，默认即原版设计值）</summary>
       <div class="adv-grid">
         <label>上升通道天数 <input type="number" id="pChannelDays" value="60" min="10" max="250" /></label>
@@ -231,28 +272,27 @@
         <label class="adv-check"><input type="checkbox" id="pBollBreakMa60" checked /> 需站上60日均线</label>
       </div>
     </details>
-    <div class="result-meme" id="condMeme" hidden data-page-node-id="BnphXyrCOyBFfSBBiFKCpr">
-      <img src="" alt="meme" data-page-node-id="TcCyJfcu8BFSMCI0blyFnt" />
-      <div class="result-meme-text" data-page-node-id="jexidLNPFwJuyNt0jHWIqo">
-        <div class="meme-big" data-page-node-id="E2AV8ECYoUgEBMVPHOOWAC"></div>
-        <div class="meme-sub" data-page-node-id="qMEwxFQdZzr1RccQCidqP7"></div>
+    <div class="result-meme" id="condMeme" hidden>
+      <img src="" alt="meme" />
+      <div class="result-meme-text">
+        <div class="meme-big"></div>
+        <div class="meme-sub"></div>
       </div>
     </div>
-    <div class="actions" data-page-node-id="condCsvRow">
+    <div class="actions">
       <button class="btn btn-ghost" id="btnCondCsv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
     </div>
-    <div class="results" data-page-node-id="dD1OlmQuLNxsMKsqE95wK0">
-      <table class="result-table" id="condTable" data-page-node-id="XDqRnViuU15UofbBW5irQc">
-        <thead data-page-node-id="QdgIw20BBwjOEll7nFahSV"></thead><tbody data-page-node-id="AU8Kd1EKupKYsxSZh0yD30"></tbody>
+    <div class="results">
+      <table class="result-table" id="condTable">
+        <thead></thead><tbody></tbody>
       </table>
     </div>
   </section>
 
-  <!-- ===== 形态打分 ===== -->
-  <section class="panel" id="tab-pattern" data-page-node-id="73tnZqToycarhyo11ZUqrF">
-    <div class="panel-head" data-page-node-id="VLDU6yqE6V5HBx25qzLlSJ">
-      <h2 data-page-node-id="G91IoDT7bER2HzRmH7mTHs">形态打分</h2>
-      <p data-page-node-id="YlfckzTBB0vOhX7KmfSfXZ">两种用法：<b>🪄 经典形态</b> 与 40 个经典底部/顶部样本比对打分；<b>⚡ 短线快拍</b> 按 4 类短线机会筛选（周期震荡 / 即将大涨 / 反弹动能 / 即将反弹）。</p>
+<section class="panel" id="tab-pattern">
+    <div class="panel-head">
+      <h2>形态打分</h2>
+      <p>两种用法：<b>🪄 经典形态</b> 与 40 个经典底部/顶部样本比对打分；<b>⚡ 短线快拍</b> 按 4 类短线机会筛选（周期震荡 / 即将大涨 / 反弹动能 / 即将反弹）。</p>
     </div>
     <div class="sub-tabs" id="patternSubTabs">
       <button type="button" class="sub-tab active" data-sub="classic">🪄 经典形态</button>
@@ -260,28 +300,28 @@
     </div>
     <div class="sub-panel" id="patternSubClassic">
       <p class="sub-note">评分 = 60% 形态相似 + 40% 结构分（0-100）：≥75 强匹配 · 60-74 较匹配 · 45-59 弱匹配；顶部形态 ×0.5；同分时已入档（A/B/C）优先。</p>
-    <div class="controls" data-page-node-id="zWM9z83p0sOrUFwqnEtgXY">
-      <label data-page-node-id="FTkHuAifnFEQbP67HJsWDJ">最低匹配度
-        <input type="number" id="patternMinScore" value="60" min="0" max="100" step="5" data-page-node-id="I2pjkVOGsxkvFwGsOra9yA" />
+    <div class="controls">
+      <label>最低匹配度
+        <input type="number" id="patternMinScore" value="60" min="0" max="100" step="5" />
       </label>
-      <label class="inline" data-page-node-id="b0ihHeU0Ig9oCHe05aG3RH"><input type="checkbox" id="patternOnlyBottom" checked data-page-node-id="WNMJEa3EpVDigDv22tPEQB" /> 只看底部形态</label>
-      <label class="inline" data-page-node-id="Zg6Qcz1g0VNZZXoz5dpJiL"><input type="checkbox" id="patternOnlyTop" data-page-node-id="4FVSF2ZMCiUtlcJkLK5xhw" /> 只看顶部形态（逃顶）</label>
+      <label class="inline"><input type="checkbox" id="patternOnlyBottom" checked /> 只看底部形态</label>
+      <label class="inline"><input type="checkbox" id="patternOnlyTop" /> 只看顶部形态（逃顶）</label>
     </div>
-    <div class="actions" data-page-node-id="JgQ89i3OjNSDCmAzsBU2X5">
-      <button class="btn btn-primary" id="btnRunPattern" data-page-node-id="432DgWEsttbA5WJAqyf9AC">▶ 开始打分</button>
+    <div class="actions">
+      <button class="btn btn-primary" id="btnRunPattern">▶ 开始打分</button>
       <button class="btn btn-ghost" id="btnPatternCsv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
-      <span class="hint" data-page-node-id="VciuT5Qv8K1Jo8jeuwKDK0">全市场打分较慢，请耐心等待一会儿…</span>
+      <span class="hint">全市场打分较慢，请耐心等待一会儿…</span>
     </div>
-    <div class="result-meme" id="patternMeme" hidden data-page-node-id="fn8ULbzEQYVtJIp6CD032O">
-      <img src="" alt="meme" data-page-node-id="jm6cVzLX1I5vVYr7wDJTFw" />
-      <div class="result-meme-text" data-page-node-id="j0zz9P8ZyT4JwWTOmGUIzk">
-        <div class="meme-big" data-page-node-id="7B6MEpOi9tvr5V0cXeCvdN"></div>
-        <div class="meme-sub" data-page-node-id="nUEVMxLWPwd6E7CtuGyKsp"></div>
+    <div class="result-meme" id="patternMeme" hidden>
+      <img src="" alt="meme" />
+      <div class="result-meme-text">
+        <div class="meme-big"></div>
+        <div class="meme-sub"></div>
       </div>
     </div>
-    <div class="results" data-page-node-id="ELzSvYIxe8PMe8nUFWxqNl">
-      <table class="result-table" id="patternTable" data-page-node-id="zhAkv8KoC6FiWFVaM9EabS">
-        <thead data-page-node-id="5R8BM8eBkl8tuNpJCLAAql"></thead><tbody data-page-node-id="K9pIyTFFLspUBrGWd9cCXE"></tbody>
+    <div class="results">
+      <table class="result-table" id="patternTable">
+        <thead></thead><tbody></tbody>
       </table>
     </div>
     </div><!-- /#patternSubClassic -->
@@ -344,8 +384,7 @@
     </div>
   </section>
 
-  <!-- ===== 9Reverse9 · 神奇九转 ===== -->
-  <section class="panel" id="tab-r9">
+<section class="panel" id="tab-r9">
     <div class="panel-head">
       <h2>9Reverse9 · 神奇九转</h2>
       <details class="doc-note">
@@ -432,8 +471,7 @@
     </div>
   </section>
 
-  <!-- ===== Bet on · 长期布局（年度级趋势） ===== -->
-  <section class="panel" id="tab-beton">
+<section class="panel" id="tab-beton">
     <div class="panel-head">
       <h2>Bet on · 长期布局</h2>
       <p>目标：找出<strong>可能持续一年以上</strong>的上涨行情，回答三件事 ——
@@ -527,11 +565,10 @@
     </div>
   </section>
 
-  <!-- ===== 蚂蚁呀欸 ===== -->
-  <section class="panel" id="tab-ant" data-page-node-id="9LMjEYNZBg2v1fmh9JF9s">
-    <div class="panel-head" data-page-node-id="yKnDqRF49bC3x2AjuzGKQW">
-      <h2 data-page-node-id="dZVqtc7e3vQFnqIHyqEdCr">蚂蚁呀欸</h2>
-      <p data-page-node-id="xx1QRlBr4Qkzz4DC6ahWNt">两种用法：<b>🧲 样本形态匹配</b> 以核心样本为中心，找当前走势相似的股票并分成
+<section class="panel" id="tab-ant">
+    <div class="panel-head">
+      <h2>蚂蚁呀欸</h2>
+      <p>两种用法：<b>🧲 样本形态匹配</b> 以核心样本为中心，找当前走势相似的股票并分成
         「周期刚刚启动 / 周期进行中」；<b>🏗 底部四层扫描</b> 是原版规则流水线（硬过滤 → 形态识别 → 综合打分 → 启动标记）。</p>
     </div>
     <div class="sub-tabs" id="antSubTabs">
@@ -624,13 +661,13 @@
         专抓底部吸筹、均线粘合待启动的标的。<b>分数区间（0-7）</b>：7 项得分按有效项数折算；
         ≥5.5 优 · 4-5.4 良 · 2-3.5 观察。判据是<b>形状无关的绝对阈值</b>（振幅区间、回归 p 值等），
         与上面的样本形态匹配是两套完全不同的口径，不要混看。</p>
-    <div class="controls" data-page-node-id="hPgYL2VVaDC4atIl74shlE">
-      <label data-page-node-id="vYWoGdy9N9uswMxeMMMcD7">最低总分
-        <input type="number" id="antMinScore" value="4" min="0" max="7" step="0.5" data-page-node-id="1lYNlV5wwmfn80hGlaRpUX" />
+    <div class="controls">
+      <label>最低总分
+        <input type="number" id="antMinScore" value="4" min="0" max="7" step="0.5" />
       </label>
-      <label class="inline" data-page-node-id="ICaZ8sHD04XN2tlq3iaWt0"><input type="checkbox" id="antOnlyTrigger" data-page-node-id="nLTiIZ2OzYzKfJ3DtLGgSs" /> 只看已启动/接近启动</label>
+      <label class="inline"><input type="checkbox" id="antOnlyTrigger" /> 只看已启动/接近启动</label>
     </div>
-    <details class="adv-params" data-page-node-id="antAdvParams">
+    <details class="adv-params">
       <summary>⚙ 蚂蚁参数（可调，默认即原版设计值）</summary>
       <div class="adv-grid">
         <label>数据回看(日) <input type="number" id="aLookback" value="300" min="120" max="500" /></label>
@@ -656,48 +693,48 @@
         <label class="adv-check"><input type="checkbox" id="aChipKeepUp" /> 筹码未改善则剔除</label>
       </div>
     </details>
-    <div class="actions" data-page-node-id="t0WeYYHrgfUSnTTflPIm8V">
-      <button class="btn btn-primary" id="btnRunAnt" data-page-node-id="bIuDcn1kTkxbUVqik7DaMA">▶ 蚂蚁扫描</button>
+    <div class="actions">
+      <button class="btn btn-primary" id="btnRunAnt">▶ 蚂蚁扫描</button>
       <button class="btn btn-ghost" id="btnAntCsv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
     </div>
-    <div class="result-meme" id="antMeme" hidden data-page-node-id="QmPlStU926ETjFJZUsmUeB">
-      <img src="" alt="meme" data-page-node-id="WOKZ0DYHb5DZowasM9Spzp" />
-      <div class="result-meme-text" data-page-node-id="Bmyk5UG86qxAOHVZonAkqS">
-        <div class="meme-big" data-page-node-id="yOqsSwoVCrXSN5FHOjmuQG"></div>
-        <div class="meme-sub" data-page-node-id="f5wv26GH8FLIHy03lcymum"></div>
+    <div class="result-meme" id="antMeme" hidden>
+      <img src="" alt="meme" />
+      <div class="result-meme-text">
+        <div class="meme-big"></div>
+        <div class="meme-sub"></div>
       </div>
     </div>
-    <div class="results" data-page-node-id="w4GKdipunSiyapiwQR9xOy">
-      <table class="result-table" id="antTable" data-page-node-id="Vhfz1uGFQfvBQkpDPQjSLL">
-        <thead data-page-node-id="MZ0bBDRMc5qiHkwu4mCH53"></thead><tbody data-page-node-id="qsIn8xY3J4HDu4LEEogWVq"></tbody>
+    <div class="results">
+      <table class="result-table" id="antTable">
+        <thead></thead><tbody></tbody>
       </table>
     </div>
     </div><!-- /#antSubScan -->
 
     <!-- ===== 长周期版：持有个1000年试试呢？ ===== -->
-    <div class="panel-sub" data-page-node-id="ant1000Sub">
+    <div class="panel-sub">
       <h3 class="sub-title">🐢 持有个1000年试试呢？<span class="sub-tag">超长周期</span></h3>
       <p class="sub-desc">与「蚂蚁呀欸」同源的多因子筛选，但把窗口拉长到 <b>10 / 20 / 25 / 30 年</b>：
         从宏观视角筛出「周期波动明显 + 周期存在时间长」的股票 —— 即那些经历过多轮
         <b>深蹲（≥35%）+ 翻倍反弹（≥70%）</b>完整循环、且周期贯穿长历史的标的。
         股票未上市满所选窗口时，从上市日起分析。首次运行需下载全市场历史数据（约十几分钟，仅一次，之后秒出）。</p>
-      <div class="actions" data-page-node-id="ant1000Actions">
-        <label class="inline" data-page-node-id="ant1000YearsLabel">周期窗口
-          <select id="ant1000Years" data-page-node-id="ant1000YearsSel">
+      <div class="actions">
+        <label class="inline">周期窗口
+          <select id="ant1000Years">
             <option value="10">10 年</option>
             <option value="20" selected>20 年</option>
             <option value="25">25 年</option>
             <option value="30">30 年</option>
           </select>
         </label>
-        <label class="inline" data-page-node-id="ant1000MinScoreLabel">最低总分
-          <input type="number" id="a1MinScore" value="4" min="0" max="7" step="0.5" style="width:64px" data-page-node-id="a1MinScore" />
+        <label class="inline">最低总分
+          <input type="number" id="a1MinScore" value="4" min="0" max="7" step="0.5" style="width:64px" />
         </label>
-        <button class="btn btn-primary" id="btnRunAnt1000" title="超长周期扫描（首次运行需下载历史数据）" data-page-node-id="btnRunAnt1000">🐢 持有个1000年试试呢？</button>
-        <button class="btn btn-ghost" id="btnAnt1000Csv" title="下载当前结果 CSV" data-page-node-id="btnAnt1000Csv">⬇ 下载 CSV</button>
-        <span class="cache-tip" id="ant1000Cache" data-page-node-id="ant1000Cache">历史数据缓存：—</span>
+        <button class="btn btn-primary" id="btnRunAnt1000" title="超长周期扫描（首次运行需下载历史数据）">🐢 持有个1000年试试呢？</button>
+        <button class="btn btn-ghost" id="btnAnt1000Csv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
+        <span class="cache-tip" id="ant1000Cache">历史数据缓存：—</span>
       </div>
-      <details class="adv-params" data-page-node-id="ant1000Adv">
+      <details class="adv-params">
         <summary>⚙ 长周期参数（可调，默认即设计值）</summary>
         <div class="adv-grid">
           <label>ZigZag 反转阈值 <input type="number" id="a1Zigzag" value="0.30" min="0.1" max="0.6" step="0.05" /></label>
@@ -713,85 +750,83 @@
           <label>距高点回撤≥(%) <input type="number" id="a1HighDrop" value="25" min="5" max="80" /></label>
         </div>
       </details>
-      <div class="result-meme" id="ant1000Meme" hidden data-page-node-id="ant1000Meme">
-        <img src="" alt="meme" data-page-node-id="ant1000MemeImg" />
-        <div class="result-meme-text" data-page-node-id="ant1000MemeText">
-          <div class="meme-big" data-page-node-id="ant1000MemeBig"></div>
-          <div class="meme-sub" data-page-node-id="ant1000MemeSub"></div>
+      <div class="result-meme" id="ant1000Meme" hidden>
+        <img src="" alt="meme" />
+        <div class="result-meme-text">
+          <div class="meme-big"></div>
+          <div class="meme-sub"></div>
         </div>
       </div>
-      <div class="chart-wrap" style="margin-top:10px" data-page-node-id="ant1000ChartWrap">
-        <canvas id="ant1000Chart" width="1100" height="420" hidden data-page-node-id="ant1000Chart"></canvas>
+      <div class="chart-wrap" style="margin-top:10px">
+        <canvas id="ant1000Chart" width="1100" height="420" hidden></canvas>
       </div>
-      <div class="results" data-page-node-id="ant1000Results">
-        <table class="result-table" id="ant1000Table" data-page-node-id="ant1000Table">
-          <thead data-page-node-id="ant1000Thead"></thead><tbody data-page-node-id="ant1000Tbody"></tbody>
+      <div class="results">
+        <table class="result-table" id="ant1000Table">
+          <thead></thead><tbody></tbody>
         </table>
       </div>
     </div>
   </section>
 
-  <!-- ===== 相似股 ===== -->
-  <section class="panel" id="tab-similar" data-page-node-id="5GBekOdzix0mmPSUqzEBnu">
-    <div class="panel-head" data-page-node-id="eIJJfh39Y4Yg7GXOCv0Xya">
-      <h2 data-page-node-id="CBtESjXiJhOGf2TTkhiZkH">相似股查找</h2>
-      <p data-page-node-id="JsU8yFTQ4OI4mmECdSAyAe">输入一只目标股，在当前范围内找：a 几乎一致 · b 走势相反 · c 时移相似（历史上它先走过的路）。</p>
+<section class="panel" id="tab-similar">
+    <div class="panel-head">
+      <h2>相似股查找</h2>
+      <p>输入一只目标股，在当前范围内找：a 几乎一致 · b 走势相反 · c 时移相似（历史上它先走过的路）。</p>
     </div>
-    <div class="controls" data-page-node-id="vydp7X7BTPkvvBLGF1SKTZ">
-      <label data-page-node-id="pfkQzv9ej7wc2dkAduN5AL">目标代码
-        <input type="text" id="similarCode" placeholder="600519" data-page-node-id="OWMrcRCw0UThqsazE8A0IJ" />
+    <div class="controls">
+      <label>目标代码
+        <input type="text" id="similarCode" placeholder="600519" />
       </label>
-      <label data-page-node-id="3rc5lirRKm2LONHuRfYdDn">参考窗口(日)
-        <input type="number" id="similarRefDays" value="60" min="20" max="500" data-page-node-id="gFGNyQ4X6Qn5pm1JGHWnMC" />
+      <label>参考窗口(日)
+        <input type="number" id="similarRefDays" value="60" min="20" max="500" />
       </label>
-      <label data-page-node-id="tHEER0wgo0qsjZObXETlv4">每类返回前 N
-        <input type="number" id="similarTopN" value="5" min="1" max="30" data-page-node-id="dxD8nlUszSD9G95HY5NHWG" />
+      <label>每类返回前 N
+        <input type="number" id="similarTopN" value="5" min="1" max="30" />
       </label>
       <label>时移搜索范围(±日)
         <input type="number" id="similarMaxLag" value="5" min="0" max="30" />
       </label>
-      <label data-page-node-id="similarVolModeLbl">波动幅度约束
-        <select id="similarVolMode" data-page-node-id="similarVolModeSel">
+      <label>波动幅度约束
+        <select id="similarVolMode">
           <option value="ignore">无视波动幅度（只看相关性）</option>
           <option value="similar">波动幅度相似</option>
         </select>
       </label>
-      <label id="similarVolThreshWrap" data-page-node-id="similarVolThreshWrap" hidden>波动相似阈值(%)
-        <input type="number" id="similarVolThreshold" value="50" min="5" max="200" step="5" data-page-node-id="similarVolThreshold" />
+      <label id="similarVolThreshWrap" hidden>波动相似阈值(%)
+        <input type="number" id="similarVolThreshold" value="50" min="5" max="200" step="5" />
       </label>
     </div>
-    <div class="actions" data-page-node-id="BVzYH1UD5FxCKlGugRLrs5">
-      <button class="btn btn-primary" id="btnRunSimilar" data-page-node-id="roH8Rlt9iR2TjXVZXDAc0j">▶ 找相似</button>
+    <div class="actions">
+      <button class="btn btn-primary" id="btnRunSimilar">▶ 找相似</button>
       <button class="btn btn-ghost" id="btnSimilarCsv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
     </div>
-    <div class="chart-wrap" data-page-node-id="tYL4YzBVOFQcFFkJlcJEjZ">
-      <canvas id="similarChart" width="1100" height="380" data-page-node-id="Id3Yu8ZsyhsLvDIzXlMYf0"></canvas>
+    <div class="chart-wrap">
+      <canvas id="similarChart" width="1100" height="380"></canvas>
     </div>
-    <div class="result-meme" id="similarMeme" hidden data-page-node-id="GBjmedkk1ydhC0sWsfdmbt">
-      <img src="" alt="meme" data-page-node-id="FHjzmpTt9MQJEPaHToVtrF" />
-      <div class="result-meme-text" data-page-node-id="gSJ7TL8IhjpNsZtzTJ7ecx">
-        <div class="meme-big" data-page-node-id="sU4yiV2oqBY8h2zT1Wzwwu"></div>
-        <div class="meme-sub" data-page-node-id="5VsxMnJgCovoqpC5XCqpzw"></div>
+    <div class="result-meme" id="similarMeme" hidden>
+      <img src="" alt="meme" />
+      <div class="result-meme-text">
+        <div class="meme-big"></div>
+        <div class="meme-sub"></div>
       </div>
     </div>
-    <div class="sim-blocks" data-page-node-id="mPRA2mlXIuBvSZgoxF1pLt">
-      <div class="sim-block" data-page-node-id="HjAVtHBvLE8Hx5GC0UHhdo">
-        <h3 data-page-node-id="0mRMwREWvV5A92HVOUUGZf">🦊 a 几乎一致</h3>
-        <table class="result-table small" id="similarATable" data-page-node-id="k9eh3WOFaMpvnl6cfEm4VP"><thead data-page-node-id="HMJoeh1dX6Ti580D7Uwfbn"></thead><tbody data-page-node-id="GnkpEMHVAHVWeaQ4uegj25"></tbody></table>
+    <div class="sim-blocks">
+      <div class="sim-block">
+        <h3>🦊 a 几乎一致</h3>
+        <table class="result-table small" id="similarATable"><thead></thead><tbody></tbody></table>
       </div>
-      <div class="sim-block" data-page-node-id="7CHHafIO6Fjzoi6rTuJ2Wy">
-        <h3 data-page-node-id="rYxF7UVxvjPUsv0NEF1JbB">🐻 b 走势相反</h3>
-        <table class="result-table small" id="similarBTable" data-page-node-id="fwKr3oE4Ao9UXjE8osPnOJ"><thead data-page-node-id="rlbzENivRCdjm43trCDZR5"></thead><tbody data-page-node-id="eOKYAtwYBD6kWv0GHxdCPq"></tbody></table>
+      <div class="sim-block">
+        <h3>🐻 b 走势相反</h3>
+        <table class="result-table small" id="similarBTable"><thead></thead><tbody></tbody></table>
       </div>
-      <div class="sim-block" data-page-node-id="bYgqoV7g1uPCnnqnY3KxsS">
-        <h3 data-page-node-id="7aBGXOQzbXtO042FcuByOX">⏳ c 时移相似</h3>
-        <table class="result-table small" id="similarCTable" data-page-node-id="KOGFh0r1xlRspcGbjrusEA"><thead data-page-node-id="Dyrr0u1AuOGSrYPeEIL0Jv"></thead><tbody data-page-node-id="ht4W3YKFWeYBXzg4c8Cebz"></tbody></table>
+      <div class="sim-block">
+        <h3>⏳ c 时移相似</h3>
+        <table class="result-table small" id="similarCTable"><thead></thead><tbody></tbody></table>
       </div>
     </div>
   </section>
 
-  <!-- ===== 前瞻预警 ===== -->
-  <section class="panel" id="tab-alert">
+<section class="panel" id="tab-alert">
     <div class="panel-head">
       <h2>前瞻预警</h2>
       <p>以「提前量」为核心的预警系统：下列每个模块各回答一个不同问题，最后合成为一张<b>动作导向</b>的信号表。</p>
@@ -917,8 +952,7 @@
     </div>
   </section>
 
-  <!-- ===== 大周期通道 ===== -->
-  <section class="panel" id="tab-cycle">
+<section class="panel" id="tab-cycle">
     <div class="panel-head">
       <h2>大周期通道</h2>
       <p>A股平均股价（830000）月K线 + 上升通道上下轨 + 周期高低位与长期趋势判定 + 建议。数据源自动级联降级：同花顺 → 腾讯月K。</p>
@@ -926,8 +960,9 @@
     <div class="controls">
       <label>数据源
         <select id="cycleSource">
-          <option value="ths830000" selected>平均股价 830000（不可用时自动降级）</option>
-          <option value="399317">国证A指 399317（全市场·2003起）</option>
+          <option value="399317" selected>国证A指 399317（全市场·2003起）</option>
+          <option value="000300">沪深300 000300（2005起）</option>
+          <option value="ths830000">平均股价 830000（同花顺·接口已失效，自动降级）</option>
           <option value="000985">中证全指 000985（2012起）</option>
           <option value="000001">上证指数 000001（2000起）</option>
         </select>
@@ -982,8 +1017,7 @@
     </div>
   </section>
 
-  <!-- ===== 期货视察 ===== -->
-  <section class="panel" id="tab-futures">
+<section class="panel" id="tab-futures">
     <div class="panel-head">
       <h2>期货视察</h2>
       <p>只取各品种<b>主连（主力合约）</b>日K线，在可调窗口内用 8 项因子研判动能与趋势强度，逐品种打分 <b>±100</b>，分列最强看涨 / 看跌。
@@ -1064,39 +1098,107 @@
     </details>
   </section>
 
-  <!-- ===== 行情查看 · K 线工作站 ===== -->
-  <section class="panel" id="tab-kline" data-page-node-id="CyLHBZdq4DNwgl4joHDbBl">
-    <div class="panel-head" data-page-node-id="j1xQhnVbfdMK4zjkg88ADX">
-      <h2 data-page-node-id="scovdVdsi9uqsyPWGFT1oA">📈 行情查看</h2>
-      <p data-page-node-id="EFgTb8QPHGxvCso3FtCqEc">个股与指数 K 线（MA5/10/20/60 + 成交量，涨红跌绿）。<b>滚轮缩放 · 拖拽平移 · 双击复位 · 悬停查看当日明细</b>；
+<section class="panel" id="tab-idxhub">
+    <div class="panel-head">
+      <h2>🌐 指数指标</h2>
+      <p>把 <b>VIX 恐慌指数 · 富时中国A50 期货 · 布伦特原油 · 恒生指数</b> 与
+        <b>境内宽基现货</b>、<b>股指期货（IF/IH/IC/IM）基差</b> 放在同一张桌子上：
+        先看外部风险锚，再看离岸与在岸的分歧，最后用期现结构确认「谁在定价」。
+        点 <b>⚡ 一键分析</b> 只输出<b>当前已触发</b>的联动信号，每条都附
+        <b>历史同类时点的胜率 / 均值</b> 与 <b>短 / 中 / 长期</b> 标定——
+        没触发的不会出现，不占版面。</p>
+      <div class="src-note">数据源：CBOE 官方 VIX CSV（美东收盘，A 股开盘前可用，分析时滞后一根）·
+        新浪外盘期货（布伦特 / A50，连续合约无换月跳空）· 新浪内盘期货主连（IF/IH/IC/IM）·
+        腾讯 ifzq 指数日K。基差 = 期货 − 现货；主连换月当日的跳空会被检测并剔除，不参与信号。</div>
+    </div>
+
+    <div class="ix-toolbar">
+      <button class="ix-btn ix-btn-main" id="ixAnalyze">⚡ 一键分析</button>
+      <button class="ix-btn" id="ixRefresh">↻ 刷新数据</button>
+      <button class="ix-btn ix-btn-ghost" id="ixMetaBtn">ⓘ 口径与局限</button>
+      <span class="ix-ts" id="ixStamp">—</span>
+    </div>
+    <div class="ix-meta-box" id="ixMetaBox" hidden></div>
+
+    <div class="ix-hero" id="ixHero"></div>
+    <div class="ix-aux" id="ixAux"></div>
+
+    <div class="ix-banner" id="ixBanner" hidden></div>
+    <div class="ix-temp" id="ixTemp"></div>
+    <div class="ix-theme" id="ixTheme" hidden></div>
+
+    <div class="ix-chart-card">
+      <div class="ix-chart-h">
+        <b id="ixChartName">K 线</b>
+        <select id="ixChartDays" class="ix-sel" title="显示多少根日K">
+          <option value="120">120 日</option>
+          <option value="180" selected>180 日</option>
+          <option value="360">360 日</option>
+          <option value="720">720 日</option>
+        </select>
+        <div class="ix-chart-tabs" id="ixChartTabs"></div>
+      </div>
+      <div class="ix-canvas-wrap" id="ixChartWrap"><canvas id="ixCanvas"></canvas></div>
+      <div class="ix-chart-legend">
+        <span><i style="background:var(--ix-ma5)"></i>MA5</span>
+        <span><i style="background:var(--ix-ma20)"></i>MA20</span>
+        <span><i style="background:var(--ix-ma60)"></i>MA60</span>
+        <span style="margin-left:auto">
+          <b class="ix-up">红</b>=高于昨收 · <b class="ix-down">绿</b>=低于昨收 ·
+          <b class="ix-flat">灰</b>=持平 · 影线与实体均按昨收分段着色
+        </span>
+      </div>
+    </div>
+
+    <div id="ixAnalysisCard">
+      <div class="ix-sec-title">🔍 联动分析（只显示已触发的）</div>
+      <div class="ix-analysis" id="ixSignals"></div>
+    </div>
+
+    <div class="ix-grid2">
+      <div class="ix-panel">
+        <div class="ix-panel-h">境内现货指数<span class="ix-hint">点击行 → 看该指数 K 线</span></div>
+        <div id="ixOnshore"></div>
+      </div>
+      <div class="ix-panel">
+        <div class="ix-panel-h">股指期货与基差<span class="ix-hint">基差 = 期货 − 现货（负=贴水）</span></div>
+        <div id="ixFutures"></div>
+      </div>
+    </div>
+  </section>
+
+<section class="panel" id="tab-kline">
+    <div class="panel-head">
+      <h2>📈 行情查看</h2>
+      <p>个股与指数 K 线（MA5/10/20/60 + 成交量，涨红跌绿）。<b>滚轮缩放 · 拖拽平移 · 双击复位 · 悬停查看当日明细</b>；
         点其它结果表里的<b>代码</b>可一键跳到这里。</p>
     </div>
-    <div class="controls" data-page-node-id="xitmjJ7NFkDCNC2a6Hh4v9">
-      <label data-page-node-id="SENOQ8JMp8OsHsHvmmHbHT">代码 / 指数
-        <input type="text" id="klineCode" placeholder="600519 或 sh000300" autocomplete="off" data-page-node-id="2nDR8ZGp6r422cyd1wd9FQ" />
+    <div class="controls">
+      <label>代码 / 指数
+        <input type="text" id="klineCode" placeholder="600519 或 sh000300" autocomplete="off" />
       </label>
-      <label data-page-node-id="OFmKS10JG5raBUH8QOWHZJ">K 线天数
-        <select id="klineDays" data-page-node-id="Y7g0EbBn0SzgoPg1rIV7TQ">
+      <label>K 线天数
+        <select id="klineDays">
           <option value="30">30 日</option>
-          <option value="60" data-page-node-id="Xvx6OVzDe3LxH77iNs6Cmi">60 日</option>
-          <option value="120" selected data-page-node-id="cvx9iaKal9aRB8OfcdLVOm">120 日</option>
-          <option value="250" data-page-node-id="Cbh8GzjrNHbqpabDd8QzNe">250 日</option>
+          <option value="60">60 日</option>
+          <option value="120" selected>120 日</option>
+          <option value="250">250 日</option>
         </select>
       </label>
-      <label class="inline" data-page-node-id="ZfSCb6WzHruMLYisFRvoF8">同花顺个股页：
-        <a id="klineLink" href="#" target="_blank" rel="noopener" data-page-node-id="YzgZLw37mTIXzDRLlFF8qz">打开 ↗</a>
+      <label class="inline">同花顺个股页：
+        <a id="klineLink" href="#" target="_blank" rel="noopener">打开 ↗</a>
       </label>
     </div>
-    <div class="actions" data-page-node-id="uHHf1jf1n9ShSMKYWu6mBL">
-      <button class="btn btn-primary" id="btnLoadKline" data-page-node-id="hWzZst2XiLrrBWCmBQDxiz">▶ 加载 K 线</button>
+    <div class="actions">
+      <button class="btn btn-primary" id="btnLoadKline">▶ 加载 K 线</button>
       <button class="btn btn-ghost" id="btnKlineImg" title="把当前图表导出为高清图片（新窗口打开）">📷 导出图片</button>
       <span class="hint">悬停看明细 · 滚轮缩放 · 拖拽平移 · 双击复位</span>
     </div>
-    <div class="result-meme" id="klineMeme" hidden data-page-node-id="XISvFCz5V9lva4ZwzWtwip">
-      <img src="" alt="meme" data-page-node-id="uFeEjQmVb2eymm33WwrcDh" />
-      <div class="result-meme-text" data-page-node-id="zmCKm3XvhI8NCfPTRCtE15">
-        <div class="meme-big" data-page-node-id="bwGeQVch3Aw6plI5iRBdid"></div>
-        <div class="meme-sub" data-page-node-id="49kSIb8BC8rwi3oVm9QAOZ"></div>
+    <div class="result-meme" id="klineMeme" hidden>
+      <img src="" alt="meme" />
+      <div class="result-meme-text">
+        <div class="meme-big"></div>
+        <div class="meme-sub"></div>
       </div>
     </div>
 
@@ -1132,14 +1234,366 @@
     </div>
 
     <!-- 图表舞台 -->
-    <div class="chart-wrap kline-stage" id="klineStage" hidden data-page-node-id="uQfYwhzUZSzgw51xFPtgxk">
-      <canvas id="klineChart" width="1100" height="560" data-page-node-id="76MoXVOIGXiUDRzL1kBO8G"></canvas>
+    <div class="chart-wrap kline-stage" id="klineStage" hidden>
+      <canvas id="klineChart" width="1100" height="560"></canvas>
       <div class="ktip" id="klineTip" hidden></div>
     </div>
   </section>
 
-  <!-- ===== 仅供学习（B站 UP主内容挖掘） ===== -->
-  <section class="panel" id="tab-bili">
+<section class="panel" id="tab-ta">
+  <div class="panel-head">
+    <h2>📐 技术分析</h2>
+    <p>从 <b>趋势 / 动量 / 位置 / 量能 / 信号 / 风险</b> 六个维度给单只股票打一个
+      <b>均衡分（满分 100）</b>，再用 <b>反抽分</b> 单独衡量「弱趋势下的强劲反抽」，
+      最后用两种口径回测「当前这套技术形态」：
+      ① 这只股票自己的历史上，出现相似形态之后 5 个交易日怎么走；
+      ② 最近一个月里，全市场出现<b>至少 2 个相同技术信号</b>的其他股票，信号后 5 个交易日怎么走。
+    </p>
+    <div class="src-note">
+      数据源：<b>data/hist.db</b> 长历史（前复权，最早 1990 年）+ <b>data/unified_data.db</b>
+      近端日线，两库按重叠期比值整体缩放对齐复权基准。横截面用主库最近 180 根 K 线。
+      收益口径：信号日<b>次日开盘买入 → 第 5 个交易日收盘卖出</b>，纯价格、不含手续费与分红。
+    </div>
+  </div>
+
+  <div class="controls ta-controls">
+    <label class="ta-code-wrap">股票代码
+      <input type="text" id="taCode" placeholder="如 600519" maxlength="6"
+             spellcheck="false" autocomplete="off" />
+    </label>
+    <label>市场背景
+      <select id="taRegime" title="决定用哪张标定表解释分数。只影响「分数意味着什么」，不改变分数本身">
+        <option value="auto" selected>自动识别</option>
+        <option value="bull">牛市</option>
+        <option value="bear">熊市</option>
+        <option value="range">震荡市</option>
+      </select>
+    </label>
+    <label>最少共同信号
+      <select id="taMinSig">
+        <option value="2" selected>2 个（按需求默认）</option>
+        <option value="3">3 个</option>
+        <option value="4">4 个</option>
+        <option value="5">5 个（很严）</option>
+      </select>
+    </label>
+    <label>回测持有期
+      <select id="taHorizon">
+        <option value="5" selected>5 个交易日</option>
+        <option value="3">3 个交易日</option>
+        <option value="10">10 个交易日</option>
+        <option value="20">20 个交易日</option>
+      </select>
+    </label>
+    <label>全市场观察窗
+      <select id="taCrossWin">
+        <option value="21" selected>最近 1 个月（21 日）</option>
+        <option value="10">最近 2 周（10 日）</option>
+        <option value="5">最近 1 周（5 日）</option>
+        <option value="42">最近 2 个月（42 日）</option>
+      </select>
+    </label>
+    <label class="ta-chk"><input type="checkbox" id="taDoCross" checked /> 全市场相似形态回测</label>
+    <label class="ta-chk"><input type="checkbox" id="taDoScore" checked /> 评分有效性检验</label>
+    <button class="btn btn-primary" id="btnTaRun">▶ 开始分析</button>
+    <button class="btn btn-ghost btn-sm" id="btnTaExport" title="导出完整明细为 CSV">⬇ 导出 CSV</button>
+  </div>
+
+  <!-- 范围内评分排行（Top N，同分并列） -->
+  <div class="controls ta-controls ta-rank-bar">
+    <label>评分排行
+      <select id="taRankMetric">
+        <option value="auto" selected>自动（按市场状态）</option>
+        <option value="balance">均衡分榜（技术面整体健康度）</option>
+        <option value="rebound">反抽分榜（超跌反抽）</option>
+      </select>
+    </label>
+    <label>取前
+      <select id="taRankTop">
+        <option value="10" selected>10 名</option>
+        <option value="20">20 名</option>
+        <option value="30">30 名</option>
+        <option value="50">50 名</option>
+      </select>
+    </label>
+    <button class="btn btn-ghost" id="btnTaRank">🏆 生成评分排行</button>
+    <span class="hint" id="taRankHint">范围取顶栏（全部 / 沪 / 深 / 北）；全市场约 10-13 秒，同范围 5 分钟内走缓存</span>
+  </div>
+
+  <div class="ta-rank-box" id="taRankBox" hidden></div>
+
+  <div class="ta-msg" id="taMsg"></div>
+
+  <!-- ★诚实披露：分数是什么、不是什么 -->
+  <details class="bf-disclose" id="taDisclose">
+    <summary>⚠ 先看这段：这个分数到底在说什么（以及不说什么）</summary>
+    <div class="bfd-body">
+      <p><b>0. 为什么要两把尺子？算术平均会漏掉「弱趋势 + 强劲反抽」。</b>
+        6 维加权是<b>算术累加</b>——趋势一弱，那 25 分就直接扣掉，靠别的维度补不回来。
+        但暴跌之后的第一次放量反抽，趋势、动量、位置<b>同时</b>是残的（刚跌完，指标必然难看），
+        唯一亮起来的是量能。实测：688585 在 2025-04-09 反抽 +6.5%、量能维度已打满 10/10，
+        均衡分却只有 36.0（趋势 9.5 / 动量 4.8 / 位置 6.7），而这个时点之后 4 个月它涨了 14 倍。
+        所以这里并列第二把尺子「反抽分」，<b>不与均衡分相加</b>，避免把两种性质的机会混成一个数。</p>
+      <p><b>1. 均衡分是「技术形态健康度」，不是「涨的概率」。</b>
+        80 分只代表「趋势、动量、量能等多项技术条件同向偏多」。全市场 139 万个时点标定：
+        均衡分与未来 20 日收益的秩相关是 <b>−0.038（轻微反向）</b>——0-35 档 20 日均值 +2.29%，
+        反而高于 80-100 档的 +1.57%。原因是「已经很强势」本身含追高风险。
+        所以下方第 ③ 块「评分有效性检验」会单独对本股做分档验证，没有区分度就直说。</p>
+      <p><b>2. 反抽分有实证支撑，但也有失效场景。</b>
+        在「均衡分 &lt; 50」的子样本里：反抽分 ≥50 的一组 20 日胜率 72.3%、均值 +10.40%；
+        30-50 组 56.2% / +3.04%；&lt;30 组只有 49.8% / +1.31%。35 个年份里有 <b>29 年</b>成立。
+        但 2009 / 2014 这类大牛市里反抽组反而跑输——牛市里强者更强，反抽逻辑不占优。</p>
+      <p><b>3. 「至少 2 个共同信号」是宽口径，容易退化成「这只股票的常态」。</b>
+        实测：当参照股命中 7 个信号时，「≥2 个重合」会覆盖约 40% 的历史交易日（茅台 741/1800）。
+        所以个股回测同时给「宽松口径」和「高相似口径（重合 ≥60%）」两栏。</p>
+      <p><b>4. 横截面一定要看「超额」，不要看绝对收益。</b>
+        2026-09 下旬至 10 月中旬全市场急跌，同期随便一只股票 5 日收益都是 −2%~−5%；
+        只看绝对收益会把「大盘跌」误判成「信号无效」。基线是<b>按每个信号日逐日对齐的全市场平均</b>。</p>
+      <p><b>5. 回测是事件研究，不是策略回测。</b>
+        不含手续费、滑点、印花税，也不模拟「一字涨停买不进 / 跌停卖不出」。
+        样本 &lt;10 时，胜率和均值都不稳定，页面会标红并给出置信区间。</p>
+      <p class="bfd-sub">已知局限：个股回测的对照组是「该股没有相似信号的其他交易日」，
+        它剔除了个股自身的长期漂移，但没有剔除市场整体的时间波动（30 年长历史无法逐日对齐全市场基准）。</p>
+    </div>
+  </details>
+
+  <div id="taResult" hidden></div>
+</section>
+
+<section class="panel" id="tab-monitor">
+    <div class="panel-head">
+      <h2>🎯 盯盘</h2>
+      <p>对<b>选定的某只或某一组股票</b>做一次盘面透视：分时节奏 · 买卖席位与近几日变动 · 资金占比
+        （机构/游资/散户/国家队/北向）· ETF 被动持仓 · 技术特征 · 到各关键节点的距离 · 触发的信号。
+        <b>不做加权评分</b>——各维度分开展示，理由见下方「口径说明」。</p>
+      <div class="src-note">
+        数据源：腾讯实时快照 / 东财 1 分钟分时 / 东财历史资金流五档 / 东财龙虎榜榜单与席位明细 /
+        东财基金季报持仓（按个股反查）/ 本地日线（近 300 交易日）。
+      </div>
+    </div>
+
+    <!-- 股票输入 + 盯盘组 -->
+    <div class="controls mt-controls">
+      <label class="mt-codes-wrap">股票代码
+        <textarea id="mtCodes" rows="2" spellcheck="false"
+          placeholder="600519, 300750, 000001（逗号/空格/换行分隔，最多 30 只）"></textarea>
+      </label>
+      <label>盯盘组
+        <select id="mtGroup"><option value="">— 未保存的组 —</option></select>
+      </label>
+      <button class="btn btn-ghost btn-sm" id="btnMtLoadGroup" title="把选中组的代码填进输入框">↧ 载入</button>
+      <button class="btn btn-ghost btn-sm" id="btnMtSaveGroup" title="把当前代码存成一个组（同名覆盖）">💾 存为组</button>
+      <button class="btn btn-ghost btn-sm" id="btnMtDelGroup" title="删除选中的组">🗑 删除</button>
+    </div>
+
+    <!-- 运行参数 + 操作 -->
+    <div class="controls mt-controls">
+      <label>分时窗口
+        <select id="mtIntradayDays">
+          <option value="1" selected>当日</option>
+          <option value="3">近 3 日</option>
+          <option value="5">近 5 日</option>
+        </select>
+      </label>
+      <label>席位回看
+        <select id="mtSeatLookback">
+          <option value="30">近 30 天</option>
+          <option value="120" selected>近 120 天</option>
+          <option value="250">近 250 天</option>
+          <option value="400">近 400 天</option>
+        </select>
+      </label>
+      <label>节点阈值
+        <input type="number" id="mtTol" value="1.0" min="0.2" max="10" step="0.2"
+               title="现价与节点的距离小于该百分比时，标记为「贴近」" />
+      </label>
+      <label>自动刷新
+        <select id="mtAutoRefresh">
+          <option value="0" selected>关闭</option>
+          <option value="15">每 15 秒</option>
+          <option value="30">每 30 秒</option>
+          <option value="60">每 60 秒</option>
+        </select>
+      </label>
+      <button class="btn btn-primary" id="btnMtRun">▶ 开始盯盘</button>
+      <button class="btn btn-ghost btn-sm" id="btnMtExpand">⤢ 全部展开</button>
+      <button class="btn btn-ghost btn-sm" id="btnMtCsv">⬇ 导出 CSV</button>
+      <span class="hint" id="mtHint">输入代码后点「开始盯盘」</span>
+    </div>
+
+    <!-- 盘面状态 + 组概况 -->
+    <div class="mt-phase" id="mtPhase" hidden></div>
+    <div class="mt-summary" id="mtSummary"></div>
+
+    <!-- 盯盘卡片列表 -->
+    <div class="mt-list" id="mtList"></div>
+
+    <!-- 成功/失败提示（放在列表之后：先看结果再看提示，避免把卡片挤出首屏） -->
+    <div class="result-meme mt-meme" id="mtMeme" hidden>
+      <img src="" alt="meme" />
+      <div class="result-meme-text">
+        <div class="meme-big"></div>
+        <div class="meme-sub"></div>
+      </div>
+    </div>
+
+    <!-- 口径说明（默认展开：这个模块的边界必须让用户先看到） -->
+    <details class="mt-disclose" id="mtDisclose" open>
+      <summary>⚠ 口径说明与已知边界（务必先看）</summary>
+      <div class="mtd-body">
+        <ol>
+          <li><b>席位分类是关键词规则，不是官方身份披露。</b>交易所只公布营业部名称，不公布背后是公募还是游资。
+            六分类（机构专用 / 国家队 / 北向 / 散户 / 游资 / 其他营业部）由名称关键词推断，
+            其中「机构专用」是交易所席位类型、可信度最高；「知名游资名单」是市场长期流传说法，可能已换人。</li>
+          <li><b>逐笔五档无法识别身份。</b>东财的超大单/大单/中单/小单是按<b>单笔成交金额</b>分档，
+            只能说明「大钱在买还是小钱在买」，不能说明「是谁在买」。同一笔 100 万买单可能来自公募、游资或大户。</li>
+          <li><b>龙虎榜只覆盖异动日。</b>只有涨幅偏离/换手异常/振幅异常才上榜，普通交易日没有席位数据。
+            卡片会显示最近一次上榜的<b>具体日期</b>——可能是几周前，也可能是几年前。</li>
+          <li><b>ETF 持仓是基金季报口径，滞后 1~3 个月，且只披露前十大重仓。</b>小市值股票会被明显低估。</li>
+          <li><b>北向资金自 2024-08 起没有盘中逐笔披露。</b>本模块的「北向」只来自龙虎榜的「沪股通/深股通专用」席位。</li>
+          <li><b>技术面基于本地近 300 个交易日。</b>MA250 之外（3 年线、历史筹码分布）不在本模块，请看「🧭 大周期」页签。</li>
+          <li><b>不提供加权总分。</b>把 7 个维度压成一个分数需要各维度的实证收益权重，
+            本项目没有任何支持这些权重的检验（Bet on 的分数对未来收益 IC≈0 就是教训）。
+            这里只给分维度事实 + 规则化信号，不给「综合分」。</li>
+        </ol>
+        <p class="mtd-warn">本模块只做数据聚合与规则化特征提取，<b>不构成投资建议</b>。
+          所有「信号」都是对历史与当下价量关系的机械描述，不预示未来收益。</p>
+      </div>
+    </details>
+
+    <!-- 席位分类规则（懒加载） -->
+    <details class="mt-disclose" id="mtRuleBox" hidden>
+      <summary>📐 席位六分类的完整关键词规则</summary>
+      <div class="mtd-body" id="mtRuleBody"></div>
+    </details>
+  </section>
+
+<section class="panel" id="tab-bfilter">
+  <div class="panel-head">
+    <h2>🧫 数据过滤</h2>
+    <p>给任意股票代码池叠加 <b>BOLL 过滤器</b>，并用 <b>大盘状态</b>做环境闸。独立于其它页签，不改变原有任何模块的行为。</p>
+  </div>
+
+  <!-- 大盘状态条 -->
+  <div class="bf-market" id="bfMarket">
+    <div class="bfm-left">
+      <span class="bfm-label">大盘状态</span>
+      <span class="bfm-badge state-unknown" id="bfmBadge">加载中…</span>
+      <span class="bfm-desc" id="bfmDesc"></span>
+    </div>
+    <div class="bfm-right">
+      <span class="bfm-meta" id="bfmMeta"></span>
+      <button class="btn btn-ghost btn-sm" id="bfmRefresh" title="重新读取最新市场状态">↻ 刷新</button>
+    </div>
+  </div>
+
+  <!-- 历史分布条 -->
+  <div class="bf-dist" id="bfDist"></div>
+
+  <!-- ★诚实披露：过滤器是择时器不是增强器 -->
+  <details class="bf-disclose" id="bfDisclose" open>
+    <summary>⚠ 实测结论披露（务必先看）</summary>
+    <div class="bfd-body">
+      <p><b>这个过滤器是「筛子」，不是「增强器」——实测超额为负。</b></p>
+      <p class="bfd-sub">口径：长历史库近 3 年 · 每个交易日对 547 只样本判定条件 · 38.9 万个评测时点 · 命中组 vs 未命中组（同一时点同一批股票 ⇒ 剔除大盘影响，差值是真 alpha）。</p>
+      <table class="bfd-table">
+        <thead><tr><th>条件</th><th>跨度</th><th>命中胜率</th><th>未中胜率</th><th>alpha(胜率)</th><th>alpha(均值收益)</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="3">⑭ 下轨低吸</td><td>T+20</td><td>53.2%</td><td>53.6%</td><td class="neg">−0.44pp</td><td class="neg">−0.81pp</td></tr>
+          <tr><td>T+60</td><td>59.3%</td><td>56.8%</td><td class="pos">+2.50pp</td><td class="neg">−0.86pp</td></tr>
+          <tr><td>T+120</td><td>66.3%</td><td>65.7%</td><td class="pos">+0.63pp</td><td class="neg">−3.50pp</td></tr>
+          <tr><td rowspan="3">⑮ 中轨突破</td><td>T+20</td><td>45.8%</td><td>53.6%</td><td class="neg">−7.77pp</td><td class="neg">−2.89pp</td></tr>
+          <tr><td>T+60</td><td>53.1%</td><td>57.1%</td><td class="neg">−4.03pp</td><td class="neg">−2.75pp</td></tr>
+          <tr><td>T+120</td><td>61.3%</td><td>65.8%</td><td class="neg">−4.53pp</td><td class="neg">−2.29pp</td></tr>
+        </tbody>
+      </table>
+      <ul>
+        <li><b>⑭ 下轨</b>：T+60 胜率有 +2.50pp 正超额，但<b>均值收益全期为负</b>（T+120 −3.50pp）→ 典型的「赢面高一点、但输的时候输更多」。</li>
+        <li><b>⑮ 突破</b>：<b>胜率与均值全期为负</b>（T+20 甚至 −7.77pp）。</li>
+        <li>大盘状态过滤（另测）：⑭/⑮ 在强牛下胜率分别 +2.1pp / +2.2pp，但<b>同期基准本身就有 50.8%</b>，超额 alpha 仍是负的 → 提升来自 beta，不是选股能力。</li>
+        <li><b>结论</b>：把它当<b>「缩小范围、降低出手次数」的筛子</b>用；<b>不要</b>理解为「信号质量变好了」。</li>
+      </ul>
+    </div>
+  </details>
+
+  <!-- 运行参数 -->
+  <div class="controls bf-controls">
+    <label>大盘闸
+      <select id="bfGate">
+        <option value="any">不限（任何市场状态都放行）</option>
+        <option value="bull">温和上行及以上（净站上 MA60）</option>
+        <option value="strong">仅强牛（净值 &gt; MA60 &gt; MA120）</option>
+      </select>
+    </label>
+    <label>股票池来源
+      <select id="bfScope"></select>
+    </label>
+    <label class="bf-codes-wrap" id="bfCodesWrap" hidden>股票代码
+      <input type="text" id="bfCodes" placeholder="如 000001,600519,300750（逗号/空格/换行分隔）" />
+    </label>
+    <label>最少K线
+      <input type="number" id="bfMinBars" value="120" min="30" step="10" />
+    </label>
+    <button class="btn btn-primary" id="btnBfRun">🧫 开始过滤</button>
+    <button class="btn btn-ghost btn-sm" id="btnBfExport" title="导出为 CSV">⬇ 导出 CSV</button>
+  </div>
+
+  <div class="bf-pool-hint" id="bfPoolHint"></div>
+
+  <!-- 过滤器多选 -->
+  <div class="bf-filters" id="bfFilters">
+    <div class="bf-sec-title">BOLL 过滤器（多选取并集）</div>
+    <div class="bf-chk-row" id="bfChkRow"></div>
+    <div class="bf-msg" id="bfMsg"></div>
+  </div>
+
+  <!-- 结果 -->
+  <div class="bf-result">
+    <div class="bf-res-head">
+      <span id="bfResCount">—</span>
+      <span class="bf-note" id="bfResNote"></span>
+    </div>
+    <div id="bfTable"></div>
+  </div>
+</section>
+
+<section class="panel" id="tab-strategy">
+    <div class="panel-head">
+      <h2>🌲 Sequoia</h2>
+      <p>海龟突破 · 均线放量 · 高旗形整理 · 涨停洗盘 · 上升跌停 · RPS 突破，可单跑或全部一起跑。</p>
+      <p class="src-note">来源于 GitHub 同名代码</p>
+    </div>
+    <div class="controls">
+      <label>选择策略
+        <select id="strategyKey"></select>
+      </label>
+      <label class="inline">范围
+        <span class="range-badge" id="strategyRangeEcho" style="margin-left:0">跟随顶栏范围</span>
+      </label>
+    </div>
+    <details class="strategy-params">
+      <summary>⚙ 高级参数（可选，留空用默认）</summary>
+      <div class="params-grid" id="strategyParamsGrid"></div>
+    </details>
+    <div class="actions">
+      <button class="btn btn-primary" id="btnRunStrategies">▶ 开始扫描</button>
+      <button class="btn btn-ghost" id="btnStrategyCsv" title="下载当前结果 CSV">⬇ 下载 CSV</button>
+    </div>
+    <div class="result-meme" id="strategyMeme" hidden>
+      <img src="" alt="meme" />
+      <div class="result-meme-text">
+        <div class="meme-big"></div>
+        <div class="meme-sub"></div>
+      </div>
+    </div>
+    <div class="results">
+      <table class="result-table" id="strategyTable">
+        <thead></thead><tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+<section class="panel" id="tab-bili">
     <div class="panel-head">
       <h2>🎓 仅供学习</h2>
       <p>读取指定 <b>B站 UP主</b> 的<b>视频 / 动态 / 字幕 / 评论</b>，提取其中出现的<b>具体股票</b>并保留原文片段，按权重排序
@@ -1273,16 +1727,40 @@
       <div class="bili-summary" id="biliSummaryBody"></div>
     </div>
   </section>
-</main>
+      </div>
+    </main>
 
-<!-- ========= 底栏 ========= -->
-<footer class="bottombar" data-page-node-id="Y5sifpB39aPGlOESue5EQc">
-  <span id="dbInfo" data-page-node-id="Z8qIk6BUipFGDeTD857uWG">读取数据库中…</span>
-  <span class="grow" data-page-node-id="dPgIAWsoFydOb4B3SISHh7"></span>
-  <span class="footer-meme" data-page-node-id="Ie7ycsPRxIcKfHX50hEGFy">仅供学习研究，不构成投资建议 · 涨红跌绿 🐮</span>
+<footer class="bottombar">
+  <span id="dbInfo">读取数据库中…</span>
+  <span class="grow"></span>
+  <span class="footer-meme">仅供学习研究，不构成投资建议 · 涨红跌绿 🐮</span>
 </footer>
 
-<!-- ========= 首次启动引导（空库强制选范围+同步，每次启动至多 1 次） ========= -->
+  </div>
+</div>
+
+<div class="divt-panel" id="divtPanel" hidden>
+  <div class="divt-head">
+    <strong>🗓 分红时点预测</strong>
+    <span class="divt-sub" id="divtSub">按个股历史分红习惯推断本周可能除权的股票，只对这些股查分红</span>
+    <button class="divt-close" id="divtClose" title="关闭">✕</button>
+  </div>
+  <div class="divt-body">
+    <div class="divt-controls">
+      <label>查看日期 <input type="date" id="divtDate" /></label>
+      <button class="btn btn-ghost" id="divtToday">本周</button>
+      <button class="btn btn-ghost" id="divtFull" title="规则d：每年2月底全市场增量（每年仅一次）">2月底全市场</button>
+      <span class="divt-flag" id="divtFlag"></span>
+    </div>
+    <div class="divt-stats" id="divtStats"></div>
+    <div class="divt-weeks" id="divtWeeks"></div>
+    <div class="divt-list-head">
+      <span>本周候选 <b id="divtCount">0</b> 只</span>
+      <span class="hint">仅影响「同步时查哪些股」，不改动任何本地历史数据</span>
+    </div>
+    <div class="divt-list" id="divtList"></div>
+  </div>
+</div>
 <div class="meme-overlay" id="bootstrapModal" hidden style="cursor:default">
   <div class="boot-card">
     <h2>👋 欢迎使用筛股工作台</h2>
@@ -1303,101 +1781,9 @@
     </div>
   </div>
 </div>
-
-<!-- ===== 数据过滤（BOLL 过滤器 + 大盘状态）· 独立新功能 ===== -->
-<section class="panel" id="tab-bfilter">
-  <div class="panel-head">
-    <h2>🧫 数据过滤</h2>
-    <p>给任意股票代码池叠加 <b>BOLL 过滤器</b>，并用 <b>大盘状态</b>做环境闸。独立于其它页签，不改变原有任何模块的行为。</p>
-  </div>
-
-  <!-- 大盘状态条 -->
-  <div class="bf-market" id="bfMarket">
-    <div class="bfm-left">
-      <span class="bfm-label">大盘状态</span>
-      <span class="bfm-badge state-unknown" id="bfmBadge">加载中…</span>
-      <span class="bfm-desc" id="bfmDesc"></span>
-    </div>
-    <div class="bfm-right">
-      <span class="bfm-meta" id="bfmMeta"></span>
-      <button class="btn btn-ghost btn-sm" id="bfmRefresh" title="重新读取最新市场状态">↻ 刷新</button>
-    </div>
-  </div>
-
-  <!-- 历史分布条 -->
-  <div class="bf-dist" id="bfDist"></div>
-
-  <!-- ★诚实披露：过滤器是择时器不是增强器 -->
-  <details class="bf-disclose" id="bfDisclose" open>
-    <summary>⚠ 实测结论披露（务必先看）</summary>
-    <div class="bfd-body">
-      <p><b>这个过滤器是「筛子」，不是「增强器」——实测超额为负。</b></p>
-      <p class="bfd-sub">口径：长历史库近 3 年 · 每个交易日对 547 只样本判定条件 · 38.9 万个评测时点 · 命中组 vs 未命中组（同一时点同一批股票 ⇒ 剔除大盘影响，差值是真 alpha）。</p>
-      <table class="bfd-table">
-        <thead><tr><th>条件</th><th>跨度</th><th>命中胜率</th><th>未中胜率</th><th>alpha(胜率)</th><th>alpha(均值收益)</th></tr></thead>
-        <tbody>
-          <tr><td rowspan="3">⑭ 下轨低吸</td><td>T+20</td><td>53.2%</td><td>53.6%</td><td class="neg">−0.44pp</td><td class="neg">−0.81pp</td></tr>
-          <tr><td>T+60</td><td>59.3%</td><td>56.8%</td><td class="pos">+2.50pp</td><td class="neg">−0.86pp</td></tr>
-          <tr><td>T+120</td><td>66.3%</td><td>65.7%</td><td class="pos">+0.63pp</td><td class="neg">−3.50pp</td></tr>
-          <tr><td rowspan="3">⑮ 中轨突破</td><td>T+20</td><td>45.8%</td><td>53.6%</td><td class="neg">−7.77pp</td><td class="neg">−2.89pp</td></tr>
-          <tr><td>T+60</td><td>53.1%</td><td>57.1%</td><td class="neg">−4.03pp</td><td class="neg">−2.75pp</td></tr>
-          <tr><td>T+120</td><td>61.3%</td><td>65.8%</td><td class="neg">−4.53pp</td><td class="neg">−2.29pp</td></tr>
-        </tbody>
-      </table>
-      <ul>
-        <li><b>⑭ 下轨</b>：T+60 胜率有 +2.50pp 正超额，但<b>均值收益全期为负</b>（T+120 −3.50pp）→ 典型的「赢面高一点、但输的时候输更多」。</li>
-        <li><b>⑮ 突破</b>：<b>胜率与均值全期为负</b>（T+20 甚至 −7.77pp）。</li>
-        <li>大盘状态过滤（另测）：⑭/⑮ 在强牛下胜率分别 +2.1pp / +2.2pp，但<b>同期基准本身就有 50.8%</b>，超额 alpha 仍是负的 → 提升来自 beta，不是选股能力。</li>
-        <li><b>结论</b>：把它当<b>「缩小范围、降低出手次数」的筛子</b>用；<b>不要</b>理解为「信号质量变好了」。</li>
-      </ul>
-    </div>
-  </details>
-
-  <!-- 运行参数 -->
-  <div class="controls bf-controls">
-    <label>大盘闸
-      <select id="bfGate">
-        <option value="any">不限（任何市场状态都放行）</option>
-        <option value="bull">温和上行及以上（净站上 MA60）</option>
-        <option value="strong">仅强牛（净值 &gt; MA60 &gt; MA120）</option>
-      </select>
-    </label>
-    <label>股票池来源
-      <select id="bfScope"></select>
-    </label>
-    <label class="bf-codes-wrap" id="bfCodesWrap" hidden>股票代码
-      <input type="text" id="bfCodes" placeholder="如 000001,600519,300750（逗号/空格/换行分隔）" />
-    </label>
-    <label>最少K线
-      <input type="number" id="bfMinBars" value="120" min="30" step="10" />
-    </label>
-    <button class="btn btn-primary" id="btnBfRun">🧫 开始过滤</button>
-    <button class="btn btn-ghost btn-sm" id="btnBfExport" title="导出为 CSV">⬇ 导出 CSV</button>
-  </div>
-
-  <div class="bf-pool-hint" id="bfPoolHint"></div>
-
-  <!-- 过滤器多选 -->
-  <div class="bf-filters" id="bfFilters">
-    <div class="bf-sec-title">BOLL 过滤器（多选取并集）</div>
-    <div class="bf-chk-row" id="bfChkRow"></div>
-    <div class="bf-msg" id="bfMsg"></div>
-  </div>
-
-  <!-- 结果 -->
-  <div class="bf-result">
-    <div class="bf-res-head">
-      <span id="bfResCount">—</span>
-      <span class="bf-note" id="bfResNote"></span>
-    </div>
-    <div id="bfTable"></div>
-  </div>
-</section>
-
-<!-- ========= 全局 loading 遮罩 ========= -->
-<div class="meme-overlay" id="overlay" hidden data-page-node-id="9wRBdZoHB6ZeSyfaLk2KLF">
-  <img id="overlayImg" src="" alt="loading" data-page-node-id="bfB9aylJkC5VdPCpTEl4W2" />
-  <div class="meme-overlay-text" id="overlayText" data-page-node-id="N84XF7IqcmLkaHy8A74QdI"></div>
+<div class="meme-overlay" id="overlay" hidden>
+  <img id="overlayImg" src="" alt="loading" />
+  <div class="meme-overlay-text" id="overlayText"></div>
   <div class="overlay-progress">
     <div class="overlay-progress-fill" id="overlayFill"></div>
   </div>
@@ -1407,19 +1793,41 @@
     <button class="overlay-cancel bg" id="btnBgRun" title="收起此窗口，任务继续在后台运行，完成后右下角提示">⤵ 后台运行</button>
   </div>
 </div>
-
-<!-- 后台任务状态角标（右下角）：运行中可点击恢复进度窗口，完成后提示 -->
 <button class="bg-pill" id="bgPill" hidden></button>
-
-<!-- ========= GIF 悬浮窗（点击切换下一张动图，永远置顶） ========= -->
 <div class="gif-float" id="gifFloat" title="点击切换下一张">
   <img id="gifFloatImg" src="/static/gifs/bunny.gif" alt="gif" draggable="false" />
   <button class="gif-float-hide" id="gifFloatHide" title="收起">✕</button>
 </div>
 <button class="gif-float-restore" id="gifFloatRestore" title="恢复悬浮窗" hidden>🐰</button>
 
-<script src="/static/app.js"></script>
-<script src="/static/kline.js"></script>
-<script src="/static/bfilter.js"></script>
+<!-- 命令面板 -->
+<div class="cmdk" id="cmdk" hidden>
+  <div class="cmdk-bd"></div>
+  <div class="cmdk-box" role="dialog" aria-modal="true" aria-label="命令面板">
+    <div class="cmdk-input">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="cmdkInput" type="text" placeholder="搜索页签或动作…" autocomplete="off" spellcheck="false">
+      <kbd>Esc</kbd>
+    </div>
+    <div class="cmdk-list" id="cmdkList"></div>
+    <div class="cmdk-foot"><span><kbd>↑↓</kbd> 选择</span><span><kbd>Enter</kbd> 打开</span><span class="cmdk-tip">输入中文或拼音首字母</span></div>
+  </div>
+</div>
+
+<div class="toast-host" id="toastHost"></div>
+
+<button class="to-top" id="toTop" title="回到顶部" hidden>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+</button>
+
+<div class="page-progress" id="pageProgress"></div>
+
+<script src="/static/app.js?v=20261101v6"></script>
+<script src="/static/kline.js?v=20261101v6"></script>
+<script src="/static/bfilter.js?v=20261101v6"></script>
+<script src="/static/monitor.js?v=20261101v6"></script>
+<script src="/static/ta.js?v=20261101v6"></script>
+<script src="/static/idxhub.js?v=20261101v6"></script>
+<script src="/static/shell.js?v=20261101v6"></script>
 </body>
 </html>

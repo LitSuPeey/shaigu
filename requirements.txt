@@ -34,3 +34,6 @@ curl_cffi>=0.6
 # faster-whisper
 # funasr
 # modelscope
+
+# 可选：通达信 TCP 快速同步通道（PyPI 上没有，只能源码装）
+# pip install git+https://github.com/clong365/easy_tdx.git
