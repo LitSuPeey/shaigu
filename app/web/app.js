@@ -3548,6 +3548,8 @@ async function startTdxSync() {
   if (!b || b.disabled) return;
   const okGo = confirm(
     '通达信通道（TCP 直连）\n\n' +
+    '· 增量模式：先看本地每只票的最新日期，只拉缺口 + 20 根对齐缓冲\n' +
+    '  （当天已同步过的票约 30 根，不再每次都拉 400 根）\n' +
     '· 节流 50ms/只，全市场约 5 分钟（⬇ 同步数据约 30 分钟）\n' +
     '· 只补日线（前复权），不删本地数据\n' +
     '· 复权基准与本地不一致时自动对齐\n\n' +
@@ -3566,6 +3568,8 @@ async function startTdxSync() {
     const lines = [
       '通达信通道同步完成',
       `成功 ${r.ok} 只 · 跳过 ${r.skipped}（无数据）· 写入失败 ${r.failed}`,
+      `${r.mode === 'full' ? '全量' : '增量'}模式：平均每只拉 ${r.avg_count} 根`
+        + (r.inc_n ? `（增量 ${r.inc_n} 只 / 全量 ${r.full_n} 只）` : ''),
       `耗时 ${r.elapsed}s（${r.speed} 只/秒），共写入 ${r.rows} 行`,
     ];
     if (r.n_aligned) lines.push(`其中 ${r.n_aligned} 只做了复权基准对齐（与本地库不一致）`);

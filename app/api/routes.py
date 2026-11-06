@@ -16,8 +16,8 @@ from ..core import tdx
 from ..core import ranges
 from ..core import sync as core_sync
 from ..modules import (alert, ant, ant1000, antsim, beton, bili, bollfilter, conditions,
-                       cycle, futures, idxhub, monitor, pattern, reverse9, similar, snap,
-                       strategies, ta, ticker)
+                       cycle, futures, idxhub, idxopt, idxpolicy, monitor, pattern, reverse9,
+                       similar, snap, strategies, ta, ticker)
 
 router = APIRouter()
 
@@ -228,11 +228,13 @@ def sync_progress():
 # ============ easy-tdx 快速同步（可选通道，缺库自动降级）============
 class TdxSyncReq(BaseModel):
     codes: list[str] = []
-    count: int = 400
+    count: Optional[int] = None       # None = 按 mode 自动决定（增量默认 30 根起）
     dry_run: bool = False
     exchange: Optional[str] = None
     sectors: Optional[list[str]] = None
-    # 节流间隔（毫秒）。★夹逼到 [80, 2000]：不允许传 0 绕过节流，
+    # ★auto=增量（按本地缺口只拉需要的根数）；full=无视本地进度统一拉 count 根
+    mode: str = "auto"
+    # 节流间隔（毫秒）。★夹逼到 [40, 2000]：不允许传 0 绕过节流，
     # 这个通道是备选，不能在正常流程里被"调快"
     interval_ms: int = 50
 
@@ -269,10 +271,11 @@ def tdx_sync(req: TdxSyncReq):
     _task_start("TDX 快速同步")
     try:
         iv = max(40, min(2000, int(req.interval_ms or 50)))
-        r = tdx.sync_daily(codes, count=int(req.count or 400),
+        md = "full" if str(req.mode or "").lower() == "full" else "auto"
+        r = tdx.sync_daily(codes, count=(int(req.count) if req.count else None),
                            progress_cb=_task_progress,
                            dry_run=bool(req.dry_run),
-                           interval_ms=iv)
+                           interval_ms=iv, mode=md)
         return _clean(r)
     except TaskCancelled:
         return _cancelled_response()
@@ -1504,6 +1507,7 @@ def idxhub_panel(force: int = 0):
         return {"ok": False, "err": "数据同步进行中，请等同步结束后再看（避免抢占网络）",
                 "hero": [], "signals": []}
     try:
+        idxhub.mark_start()          # 立即置为「进行中」，前端进度条才不会刚显示就消失
         return _clean(idxhub.panel(force=bool(force)))
     except Exception as e:  # noqa: BLE001 —— 返回可读错误而不是 500
         return {"ok": False, "err": "指数指标加载失败: %s" % e,
@@ -1517,3 +1521,113 @@ def idxhub_kline(key: str = "vix", days: int = 260):
         return _clean(idxhub.kline(key, days))
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "err": "K 线加载失败: %s" % e, "bars": []}
+
+
+@router.get("/api/idxhub/progress")
+def idxhub_progress():
+    """拉取进度（前端 200ms 轮询一次，画进度条）。"""
+    return _clean(idxhub.progress())
+
+
+@router.get("/api/idxhub/mins")
+def idxhub_mins(key: str = "a50"):
+    """分时（1 分钟）+ 隔夜漂移。只有外盘期货（A50/布伦特）有隔夜段。"""
+    try:
+        return _clean(idxhub.mins(key))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "分时加载失败: %s" % e, "points": []}
+
+
+@router.get("/api/idxhub/calib")
+def idxhub_calib(force: int = 0):
+    """风险温度 6 维权重的历史标定（含样本外检验）。
+
+    ★ 首次 5~10s（要逐日重算 6 维分数再跑 4000 组权重搜索），结果落盘 12 小时。
+      独立接口，不并进 /api/idxhub/panel。
+    """
+    try:
+        return _clean(idxhub.calibrate(force=bool(force)))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "权重标定失败: %s" % e}
+
+
+@router.get("/api/idxhub/fx")
+def idxhub_fx(force: int = 0):
+    """汇率与中美利差（独立读数，不并入温度权重）。
+
+    ★ 首次约 6s（央行中间价要按月分段拉、利差要拉两国收益率），缓存 6 小时。
+    ★ USDCNY 上涨 = 人民币贬值，页面上已按这个方向写文案。
+    """
+    try:
+        return _clean(idxhub.fx_block(force=bool(force)))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "汇率与利差加载失败: %s" % e}
+
+
+# ============ 期权链与隐含波动率曲面（独立接口，不并入主面板） ============
+# ★ 为什么要分开：中金所官方日行情 CSV 首次拉取实测 20s（后续有落盘缓存约 0.1s），
+#   并进 /api/idxhub/panel 会把 3s 的页签拖到 20s+。前端在页签渲染完成后再异步取。
+@router.get("/api/idxopt/meta")
+def idxopt_meta():
+    """期权口径披露：定价模型、远期推法、到期日规则。"""
+    return _clean(idxopt.meta_info())
+
+
+@router.get("/api/idxopt/panel")
+def idxopt_panel(force: int = 0):
+    """IO / HO / MO / 300ETF 四个品种的 IV 曲面 + 期限结构 + 偏斜。"""
+    if _idx_busy():
+        return {"ok": False, "err": "数据同步进行中，请稍后再看（避免抢占网络）",
+                "items": []}
+    try:
+        return _clean(idxopt.panel(force=bool(force)))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "期权面板加载失败: %s" % e, "items": []}
+
+
+@router.get("/api/idxopt/history")
+def idxopt_history(force: int = 0):
+    """期权 IV 的历史分位（固定 30 天期限，逐日回溯中金所日行情 CSV）。
+
+    ★ 首次 15~30s（要回溯 120 个交易日的 CSV），之后每天只补 1 个文件。
+      这也是它必须独立成接口、不能并进 /api/idxopt/panel 的原因。
+    ★ 有了分位之后，「偏高/偏低」才不是拍脑袋的经验阈值 ——
+      实测 IO 21.45% 在自身 120 日里是 80.8 分位（高位），
+      而旧的经验刻度会把它判成「常态」。
+    """
+    try:
+        return _clean(idxopt.iv_history(force=bool(force)))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "IV 历史加载失败: %s" % e, "stats": {}}
+
+
+@router.get("/api/idxopt/qvix")
+def idxopt_qvix(name: str = "300etf", force: int = 0):
+    """中国波指 QVIX（官方 30 天恒定期限口径），用来补 ETF 期权的历史分位。
+
+    ★ 与自算 ATM IV **口径不同**，不能混：卡片的 IV 仍用自算值，
+      QVIX 只回答「当前贵不贵」。
+    """
+    try:
+        return _clean(idxopt.qvix(name, force=bool(force)))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "QVIX 加载失败: %s" % e}
+
+
+# ============ 政策面（独立接口，异步加载） ============
+@router.get("/api/idxpolicy/panel")
+def idxpolicy_panel(force: int = 0):
+    """政策文本事件流：部委/主题归类 + 方向计数 + 惯例窗口。
+
+    ★ 独立于主面板：快讯源要拉 200 条再逐条正则（1.7~6s），
+      而政策事件的更新频率是小时级，没必要跟着主面板刷新。
+    """
+    try:
+        return _clean(idxpolicy.panel(force=bool(force)))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": "政策面加载失败: %s" % e, "events": []}
+
+
+@router.get("/api/idxpolicy/meta")
+def idxpolicy_meta():
+    return _clean(idxpolicy.meta_info())

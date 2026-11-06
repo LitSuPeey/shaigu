@@ -312,6 +312,27 @@
 }
 .ix-note b { color: var(--ink-soft); }
 
+/* ---------- 拉取进度条 ---------- */
+.ix-prog {
+  display: flex; align-items: center; gap: 10px;
+  margin: -4px 0 12px; min-height: 18px;
+}
+.ix-prog[hidden] { display: none; }
+.ix-prog-bar {
+  flex: 1; height: 4px; border-radius: 999px;
+  background: var(--line); overflow: hidden;
+}
+.ix-prog-bar i {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-deep));
+  border-radius: 999px; transition: width .25s ease;
+}
+.ix-prog-txt {
+  font-size: 11px; color: var(--ink-faint);
+  font-family: var(--mono); white-space: nowrap;
+}
+.ix-fb-body .ix-prog { margin: -2px 0 12px; }
+
 /* ---------- 危机横幅 ---------- */
 .ix-banner {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -376,3 +397,182 @@
   30% { box-shadow: 0 0 0 3px var(--accent-soft); }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
+
+/* ==========================================================================
+   期权 / 政策面 / 分时 / 权重标定（2026-11-06 新增）
+   —— 四个区块都是**独立异步接口**，主面板不等它们，失败也不影响上面任何内容。
+   ========================================================================== */
+.ix-block { margin-bottom: 14px; }
+
+/* ---------- 分时与隔夜漂移 ---------- */
+.ix-min-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0; }
+.ix-min-card {
+  padding: 11px 14px; border-bottom: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: 7px;
+}
+.ix-min-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.ix-min-name { font-size: 12.5px; color: var(--ink-soft); font-weight: 600; }
+.ix-min-px { font-family: var(--mono); font-size: 17px; font-weight: 700; letter-spacing: .3px; }
+.ix-min-pct { font-family: var(--mono); font-size: 12px; }
+.ix-min-ov {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--ink-faint);
+  background: var(--tint-mute); border: 1px solid var(--tint-mute-bd);
+  border-radius: 7px; padding: 4px 8px;
+}
+.ix-min-ov b { font-family: var(--mono); }
+.ix-min-ov .ix-ov-k { color: var(--ink-soft); }
+.ix-min-spark { display: block; width: 100%; height: 46px; }
+
+/* ---------- 期权 ---------- */
+.ix-opt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; padding: 12px 13px; }
+.ix-opt-card {
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  background: var(--bg-soft); cursor: pointer; transition: .15s;
+}
+.ix-opt-card:hover { border-color: var(--accent); }
+.ix-opt-card.on { border-color: var(--accent); background: var(--tint-a); }
+.ix-opt-h { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.ix-opt-t { font-size: 13px; font-weight: 700; }
+.ix-opt-big { font-family: var(--mono); font-size: 24px; font-weight: 700; line-height: 1.15; }
+.ix-opt-big small { font-size: 11px; color: var(--ink-faint); font-weight: 400; margin-left: 3px; }
+.ix-opt-meta { font-size: 11.5px; color: var(--ink-faint); line-height: 1.7; margin-top: 4px; }
+.ix-opt-meta b { color: var(--ink-soft); font-family: var(--mono); }
+.ix-opt-kv { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.ix-opt-chart { padding: 4px 8px 10px; }
+.ix-opt-chart canvas { display: block; width: 100%; height: 280px; }
+.ix-opt-legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 0 14px 10px; font-size: 11px; color: var(--ink-faint); }
+.ix-opt-legend i { display: inline-block; width: 11px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.ix-opt-fail { padding: 12px 14px; font-size: 12px; color: var(--ink-faint); }
+
+/* ---------- 政策面 ---------- */
+.ix-pol-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); }
+.ix-pol-tone { font-size: 15px; font-weight: 700; }
+.ix-pol-tone.tone-ease { color: var(--good); }
+.ix-pol-tone.tone-tight { color: var(--bad); }
+.ix-pol-tone.tone-mixed { color: var(--warn-ink); }
+.ix-pol-tone.tone-none { color: var(--ink-faint); }
+.ix-pol-conf { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.ix-pol-list { display: flex; flex-direction: column; }
+.ix-pol-item {
+  display: grid; grid-template-columns: 44px 76px 52px 1fr; gap: 9px; align-items: baseline;
+  padding: 8px 14px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px;
+}
+.ix-pol-item:last-child { border-bottom: none; }
+.ix-pol-item:hover { background: var(--bg-hover); }
+.ix-pol-time { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+.ix-pol-ag { font-size: 11.5px; color: var(--ink-soft); }
+.ix-pol-dir { font-size: 11px; text-align: center; border-radius: 999px; padding: 1px 0; }
+.ix-pol-dir.d-宽松 { background: var(--tag-red-bg); color: var(--good); }
+.ix-pol-dir.d-紧缩 { background: var(--tag-green-bg, var(--tag-gray-bg)); color: var(--bad); }
+.ix-pol-dir.d-中性, .ix-pol-dir.d-分歧 { background: var(--tag-gray-bg); color: var(--tag-gray-ink); }
+.ix-pol-title { line-height: 1.6; }
+.ix-pol-title a { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--line); }
+.ix-pol-title a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.ix-pol-foot { padding: 10px 14px; font-size: 11.5px; color: var(--ink-faint); line-height: 1.8; }
+.ix-pol-win { display: flex; gap: 7px; flex-wrap: wrap; padding: 0 14px 10px; }
+@media (max-width: 700px) {
+  .ix-pol-item { grid-template-columns: 40px 1fr; }
+  .ix-pol-item .ix-pol-ag, .ix-pol-item .ix-pol-dir { display: none; }
+}
+
+/* ---------- 权重标定 ---------- */
+.ix-cal-verdict {
+  margin: 12px 13px; padding: 11px 13px; border-radius: 10px;
+  font-size: 12.5px; line-height: 1.8;
+  border: 1px solid var(--warn-line); background: var(--warn-bg); color: var(--ink-soft);
+}
+.ix-cal-verdict.g-flipped { border-color: var(--tint-err-bd); background: var(--tint-err); }
+.ix-cal-verdict.g-none { border-color: var(--line); background: var(--bg-soft); }
+.ix-cal-verdict b { color: var(--ink); }
+.ix-cal-verdict .ix-cal-g { display: block; font-size: 11px; color: var(--ink-faint); margin-top: 6px; }
+.ix-cal-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ix-cal-tbl th, .ix-cal-tbl td { padding: 6px 10px; border-bottom: 1px solid var(--line-soft); text-align: right; }
+.ix-cal-tbl th:first-child, .ix-cal-tbl td:first-child { text-align: left; font-family: var(--font); }
+.ix-cal-tbl thead th { background: var(--bg-soft); font-size: 11px; color: var(--ink-soft); font-weight: 600; }
+.ix-cal-tbl td { font-family: var(--mono); }
+.ix-cal-tbl tr.on td { background: var(--tint-a); }
+.ix-cal-bar { display: inline-block; height: 6px; border-radius: 3px; background: var(--accent); vertical-align: middle; }
+.ix-cal-bar.neg { background: var(--bad); }
+.ix-cal-buckets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 10px 13px; }
+.ix-cal-bk {
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 6px; text-align: center;
+  background: var(--bg-soft);
+}
+.ix-cal-bk .k { font-size: 10.5px; color: var(--ink-faint); }
+.ix-cal-bk .v { font-family: var(--mono); font-size: 14px; font-weight: 700; margin-top: 2px; }
+.ix-cal-bk .w { font-size: 10.5px; color: var(--ink-faint); }
+
+/* ★ style.css 的全局 thead th 是 top:74px 吸顶（给长表格用的）。
+   标定表只有 6 行，放在 overflow-x 容器里会让表头浮到容器中间、盖住第一行数据。
+   这里显式取消吸顶。 */
+.ix-cal-tbl thead th { position: static; box-shadow: none; }
+.ix-cal-tbl tbody tr:nth-child(even) { background: transparent; }
+
+/* IV 历史分位小标签（跟在 ATM IV 大数字后面） */
+.ix-opt-big { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.ix-opt-pct {
+  font-size: 10.5px; font-family: var(--mono); font-weight: 400;
+  color: var(--ink-soft); background: var(--tint-mute);
+  border: 1px solid var(--tint-mute-bd); border-radius: 999px; padding: 1px 6px;
+  line-height: 16px; letter-spacing: 0;
+}
+.ix-opt-pct.dim { color: var(--ink-faint); background: transparent; border-color: var(--line-soft); }
+
+/* 「实时」角标：盘中用延时快照算 IV 时才出现，和 T-1 口径区分开 */
+.ix-opt-live {
+  font-size: 10px; font-family: var(--mono); font-weight: 600;
+  color: var(--accent); background: var(--tint-a);
+  border: 1px solid var(--accent-soft); border-radius: 4px;
+  padding: 0 4px; line-height: 15px; letter-spacing: .3px;
+}
+
+/* ---------- 汇率与中美利差 ---------- */
+.ix-fx-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+.ix-fx-rates { border-top: 1px solid var(--line-soft); }
+.ix-fx-cell { padding: 10px 13px; border-right: 1px solid var(--line-soft); }
+.ix-fx-cell:last-child { border-right: none; }
+.ix-fx-cell .k { font-size: 11px; color: var(--ink-faint); }
+.ix-fx-cell .v { font-family: var(--mono); font-size: 18px; font-weight: 700; margin-top: 1px; letter-spacing: .2px; }
+.ix-fx-cell .v small { font-size: 11px; font-weight: 400; color: var(--ink-faint); margin-left: 2px; }
+.ix-fx-cell .s { font-size: 11px; margin-top: 2px; color: var(--ink-faint); line-height: 1.5; }
+.ix-fx-num { font-family: var(--mono); color: var(--ink-soft); }
+/* 汇率方向用醒目的橙色标签，不用红绿 —— 红绿在本页是涨跌语义，
+   而 USDCNY 上涨是「人民币贬值」，直接套红绿会被读反 */
+.ix-fx-dir { color: var(--warn-ink); font-weight: 600; }
+.ix-fx-sub { color: var(--ink-faint); font-size: 10.5px; }
+.ix-fx-chart { padding: 8px 13px 6px; border-top: 1px solid var(--line-soft); }
+.ix-fx-ct { display: block; font-size: 10.5px; color: var(--ink-faint); margin-bottom: 3px; }
+@media (max-width: 720px) {
+  .ix-fx-grid { grid-template-columns: repeat(2, 1fr); }
+  .ix-fx-cell:nth-child(2n) { border-right: none; }
+  .ix-fx-cell:nth-child(-n+2) { border-bottom: 1px solid var(--line-soft); }
+}
+
+/* ---------- 顶部速览条（并列读数，非综合评分） ---------- */
+.ix-glance { display: flex; gap: 7px; flex-wrap: wrap; margin: -2px 0 13px; }
+.ix-gl {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg-card);
+  text-decoration: none; color: var(--ink-soft);
+  font-size: 11.5px; transition: .15s; white-space: nowrap; line-height: 1.6;
+}
+.ix-gl:hover { border-color: var(--accent); background: var(--bg-hover); }
+.ix-gl-k { color: var(--ink-faint); font-size: 11px; }
+.ix-gl-v { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--ink); }
+.ix-gl-s { font-size: 10.5px; color: var(--ink-faint); }
+.ix-gl.t-warn { border-color: var(--warn-line); background: var(--warn-bg); }
+.ix-gl.t-warn .ix-gl-v { color: var(--warn-ink); }
+.ix-gl.t-crisis { border-color: var(--tint-err-bd); background: var(--tint-err); }
+.ix-gl.t-crisis .ix-gl-v { color: var(--good); }
+.ix-gl.t-up { border-color: var(--accent-soft); }
+.ix-gl.t-up .ix-gl-v { color: var(--accent); }
+
+/* 温度历史曲线（标定区块提供，回填到温度卡） */
+.ix-temp-hist { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.ix-temp-hist svg { flex: 1 1 auto; height: 30px; min-width: 80px; }
+.ix-th-l, .ix-th-r { font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; }
+.ix-th-r b { color: var(--ink-soft); font-family: var(--mono); }
+.ix-th-note { font-size: 10.5px; color: var(--ink-faint); margin-top: 3px; line-height: 1.6; }
+.ix-th-note b { color: var(--ink-soft); }

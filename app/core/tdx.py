@@ -60,10 +60,42 @@ MIN_INTERVAL_MS = 50
 # 比值偏离超过这个值就认为复权基准不同，需要缩放对齐
 RATIO_TOL = 0.005
 OVERLAP_DAYS = 20          # 用最近 20 个重叠日算比值中位数
-DEFAULT_COUNT = 400        # 单次拉取的 K 线根数（覆盖一年多的交易日）
+DEFAULT_COUNT = 400        # 首次/长期未同步时拉取的 K 线根数（覆盖一年多的交易日）
+MIN_INCREMENT = 30         # 增量模式最少拉 30 根（20 根重叠对齐 + 10 根余量）
 
 
 _last_call = [0.0]
+
+
+def _local_last(conn) -> dict:
+    """{code: 本地最新日期}。一次 GROUP BY 拿全量，别逐只查（5500 次查询会很慢）。"""
+    try:
+        cur = conn.execute("SELECT code, MAX(date) FROM daily GROUP BY code")
+        return {str(r[0]): str(r[1])[:10] for r in cur if r[0] and r[1]}
+    except Exception:                          # noqa: BLE001
+        return {}
+
+
+def _count_for(last: Optional[str], today=None) -> int:
+    """按「本地缺口」算需要拉多少根，而不是每次都拉 400 根。
+
+    ★ 增量拉取的收益不只是省流量：TDX 返回的每一根都要走
+      `_align_to_local` + 逐行 UPSERT，400 根 → 30 根能把写入侧开销压掉一个量级。
+      自然日 → 交易日按 ×0.72 近似（一年 365 天约 244 个交易日）。
+    """
+    if not last:
+        return DEFAULT_COUNT
+    import datetime as _dt
+    try:
+        d0 = _dt.date.fromisoformat(str(last)[:10])
+    except (TypeError, ValueError):
+        return DEFAULT_COUNT
+    d1 = today or _dt.date.today()
+    gap = (d1 - d0).days
+    if gap <= 0:
+        return MIN_INCREMENT          # 已是最新，仍拉一点做复权比值校验
+    need = int(gap * 0.72) + OVERLAP_DAYS + 5
+    return max(MIN_INCREMENT, min(DEFAULT_COUNT, need))
 
 
 def _throttle(interval_ms: int = MIN_INTERVAL_MS) -> None:
@@ -171,13 +203,18 @@ def _align_to_local(conn, code: str, new_df: pd.DataFrame) -> tuple:
 # ---------------------------------------------------------------------------
 # 批量同步
 # ---------------------------------------------------------------------------
-def sync_daily(codes: List[str], count: int = DEFAULT_COUNT,
+def sync_daily(codes: List[str], count: Optional[int] = None,
                progress_cb=None, dry_run: bool = False,
-               interval_ms: int = MIN_INTERVAL_MS) -> dict:
+               interval_ms: int = MIN_INTERVAL_MS, mode: str = "auto") -> dict:
     """用 easy-tdx 批量补日线。
 
+    mode:
+      · "auto"（默认）：**增量**——先查本地每只票的最新日期，只拉缺口 + 20 根对齐缓冲
+                       （当天已同步过的票拉 30 根，而不是 400 根）
+      · "full"       ：无视本地进度，统一拉 `count` 根（首次建库/怀疑数据损坏时用）
+
     ★单连接串行（并发会掉 15% 的数据，见模块 docstring）。
-    返回 {ok, failed, skipped, aligned, rows, elapsed, errors}
+    返回 {ok, failed, skipped, aligned, rows, elapsed, mode, inc_n, full_n}
     """
     if not available():
         return {"ok": 0, "failed": 0, "skipped": len(codes or []), "rows": 0,
@@ -193,9 +230,13 @@ def sync_daily(codes: List[str], count: int = DEFAULT_COUNT,
     conn = db.reader()
     wconn = db.writer() if not dry_run else None
     ok = failed = skipped = rows = 0
+    inc_n = full_n = 0
+    cnt_sum = 0
     aligned: List[dict] = []
     errors: List[str] = []
     t0 = _t.time()
+    # 只有增量模式才需要本地进度表
+    last_map = _local_last(conn) if (mode == "auto" and not count) else {}
 
     try:
         with MacClient.from_best_host() as client:
@@ -206,8 +247,21 @@ def sync_daily(codes: List[str], count: int = DEFAULT_COUNT,
                     progress_cb(i + 1, len(codes),
                                 f"备用通道同步 {i+1}/{len(codes)}（成功 {ok}，"
                                 f"约剩 {eta // 60} 分 {eta % 60} 秒）")
+                # 本只要拉多少根
+                if count:
+                    cnt = int(count)
+                elif mode == "auto":
+                    cnt = _count_for(last_map.get(code))
+                else:
+                    cnt = DEFAULT_COUNT
+                if cnt < DEFAULT_COUNT:
+                    inc_n += 1
+                else:
+                    full_n += 1
+                cnt_sum += cnt
+
                 _throttle(interval_ms)
-                df = fetch_kline(client, code, count)
+                df = fetch_kline(client, code, cnt)
                 if df is None or not len(df):
                     skipped += 1
                     continue
@@ -259,11 +313,16 @@ def sync_daily(codes: List[str], count: int = DEFAULT_COUNT,
         "ok": ok, "failed": failed, "skipped": skipped, "rows": rows,
         "aligned": aligned[:30], "n_aligned": len(aligned),
         "elapsed": elapsed,
+        "mode": mode,
+        "inc_n": inc_n, "full_n": full_n,
+        "avg_count": round(cnt_sum / len(codes), 1) if codes else 0,
         "speed": round(ok / elapsed, 1) if elapsed > 0 else None,
         "dry_run": dry_run,
         "interval_ms": interval_ms,
         "role": "optional",
-        "note": (f"通达信通道（节流 {interval_ms}ms/只）；{ok} 只成功、"
+        "note": (f"通达信通道（{'增量' if mode == 'auto' and not count else '全量'}，"
+                 f"平均每只拉 {round(cnt_sum / len(codes), 1) if codes else 0} 根，"
+                 f"节流 {interval_ms}ms/只）；{ok} 只成功、"
                  f"{skipped} 只无数据、{failed} 只写入失败。"
                  + (f" 其中 {len(aligned)} 只做了复权基准缩放（与本地不一致）。"
                     if aligned else "")),

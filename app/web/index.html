@@ -8,12 +8,12 @@
 <link rel="icon" href="/static/memes/开心.png">
 <!-- 主题预设（样式生效前落定 data-theme，避免闪白） -->
 <script>try{var _t=localStorage.getItem('shaigu.theme');var _ok=['dark','light','pink','blue','beige'];document.documentElement.setAttribute('data-theme',_ok.indexOf(_t)>=0?_t:'dark');}catch(e){document.documentElement.setAttribute('data-theme','dark');}</script>
-<link rel="stylesheet" href="/static/style.css?v=20261105v3">
-<link rel="stylesheet" href="/static/bfilter.css?v=20261105v3">
-<link rel="stylesheet" href="/static/monitor.css?v=20261105v3">
-<link rel="stylesheet" href="/static/ta.css?v=20261105v3">
-<link rel="stylesheet" href="/static/idxhub.css?v=20261105v3">
-<link rel="stylesheet" href="/static/shell.css?v=20261105v3">
+<link rel="stylesheet" href="/static/style.css?v=20261107d">
+<link rel="stylesheet" href="/static/bfilter.css?v=20261107d">
+<link rel="stylesheet" href="/static/monitor.css?v=20261107d">
+<link rel="stylesheet" href="/static/ta.css?v=20261107d">
+<link rel="stylesheet" href="/static/idxhub.css?v=20261107d">
+<link rel="stylesheet" href="/static/shell.css?v=20261107d">
 </head>
 <body>
 
@@ -39,6 +39,10 @@
       </div>
     </header>
     <div class="ix-fb-body">
+      <div class="ix-prog" id="ixFlashProg" hidden>
+        <div class="ix-prog-bar"><i id="ixFlashProgFill"></i></div>
+        <span class="ix-prog-txt" id="ixFlashProgTxt">准备中…</span>
+      </div>
       <div class="ix-hero" id="ixFlashHero"></div>
       <div class="ix-banner" id="ixFlashBanner" hidden></div>
       <div class="ix-temp" id="ixFlashTemp"></div>
@@ -1108,8 +1112,11 @@
         <b>历史同类时点的胜率 / 均值</b> 与 <b>短 / 中 / 长期</b> 标定——
         没触发的不会出现，不占版面。</p>
       <div class="src-note">数据源：CBOE 官方 VIX CSV（美东收盘，A 股开盘前可用，分析时滞后一根）·
-        新浪外盘期货（布伦特 / A50，连续合约无换月跳空）· 新浪内盘期货主连（IF/IH/IC/IM）·
-        腾讯 ifzq 指数日K。基差 = 期货 − 现货；主连换月当日的跳空会被检测并剔除，不参与信号。</div>
+        新浪外盘期货（布伦特 / A50，连续合约无换月跳空 + 1 分钟分时）· 新浪内盘期货主连（IF/IH/IC/IM）·
+        中金所日行情 CSV（IO/HO/MO 期权，日频）· 东财期权行情（沪市 300ETF 期权）· 公开快讯（政策面）。
+        基差 = 期货 − 现货；主连换月当日的跳空会被检测并剔除，不参与信号；
+        年化基差按<b>各品种主力合约的实际剩余到期天数</b>计算，剩余 &lt;3 日不展示。
+        期权与政策面是<b>独立异步接口</b>，加载慢或失败都不影响本页其它内容。</div>
     </div>
 
     <div class="ix-toolbar">
@@ -1118,10 +1125,15 @@
       <button class="ix-btn ix-btn-ghost" id="ixMetaBtn">ⓘ 口径与局限</button>
       <span class="ix-ts" id="ixStamp">—</span>
     </div>
+    <div class="ix-prog" id="ixProg" hidden>
+      <div class="ix-prog-bar"><i id="ixProgFill"></i></div>
+      <span class="ix-prog-txt" id="ixProgTxt">准备中…</span>
+    </div>
     <div class="ix-meta-box" id="ixMetaBox" hidden></div>
 
     <div class="ix-hero" id="ixHero"></div>
     <div class="ix-aux" id="ixAux"></div>
+    <div class="ix-glance" id="ixGlance" hidden></div>
 
     <div class="ix-banner" id="ixBanner" hidden></div>
     <div class="ix-temp" id="ixTemp"></div>
@@ -1164,6 +1176,41 @@
         <div class="ix-panel-h">股指期货与基差<span class="ix-hint">基差 = 期货 − 现货（负=贴水）</span></div>
         <div id="ixFutures"></div>
       </div>
+    </div>
+
+    <div class="ix-panel ix-block" id="ixFxCard">
+      <div class="ix-panel-h">汇率与中美利差
+        <span class="ix-hint">USDCNY 数值涨 = 人民币贬值 · 独立读数，未纳入温度权重</span>
+      </div>
+      <div id="ixFx"><div class="ix-empty">汇率与利差加载中（首次约 6 秒）…</div></div>
+    </div>
+
+    <div class="ix-panel ix-block" id="ixMinCard">
+      <div class="ix-panel-h">分时与隔夜漂移
+        <span class="ix-hint">A50 / 布伦特在 A 股收盘后还在动，日线要等次日才有新的一根</span>
+      </div>
+      <div id="ixMin"><div class="ix-empty">分时数据加载中…</div></div>
+    </div>
+
+    <div class="ix-panel ix-block" id="ixOptCard">
+      <div class="ix-panel-h">期权与隐含波动率曲面
+        <span class="ix-hint">IO / HO / MO / 300ETF · Black-76 反解 · 用官方 Delta 交叉验证</span>
+      </div>
+      <div id="ixOpt"><div class="ix-empty">期权链加载中（中金所首次约 10-20 秒，之后走本地缓存）…</div></div>
+    </div>
+
+    <div class="ix-panel ix-block" id="ixPolicyCard">
+      <div class="ix-panel-h">政策面（文本事件流）
+        <span class="ix-hint">新闻标题级检索 · 不是政策原文分析 · 独立异步加载</span>
+      </div>
+      <div id="ixPolicy"><div class="ix-empty">政策事件扫描中…</div></div>
+    </div>
+
+    <div class="ix-panel ix-block" id="ixCalibCard">
+      <div class="ix-panel-h">风险温度权重标定
+        <span class="ix-hint">把「拍出来的权重」拿去历史里对一遍 —— 结论可能不体面</span>
+      </div>
+      <div id="ixCalib"><div class="ix-empty">标定计算中（首次约 5-10 秒）…</div></div>
     </div>
   </section>
 
@@ -1823,12 +1870,12 @@
 
 <div class="page-progress" id="pageProgress"></div>
 
-<script src="/static/app.js?v=20261105v3"></script>
-<script src="/static/kline.js?v=20261105v3"></script>
-<script src="/static/bfilter.js?v=20261105v3"></script>
-<script src="/static/monitor.js?v=20261105v3"></script>
-<script src="/static/ta.js?v=20261105v3"></script>
-<script src="/static/idxhub.js?v=20261105v3"></script>
-<script src="/static/shell.js?v=20261105v3"></script>
+<script src="/static/app.js?v=20261107d"></script>
+<script src="/static/kline.js?v=20261107d"></script>
+<script src="/static/bfilter.js?v=20261107d"></script>
+<script src="/static/monitor.js?v=20261107d"></script>
+<script src="/static/ta.js?v=20261107d"></script>
+<script src="/static/idxhub.js?v=20261107d"></script>
+<script src="/static/shell.js?v=20261107d"></script>
 </body>
 </html>

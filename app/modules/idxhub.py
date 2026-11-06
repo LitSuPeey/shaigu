@@ -156,7 +156,7 @@ def _ttl_an() -> float:
     return 60.0 if _is_trade_hours() else 180.0
 
 
-_TTL_VIX = 6 * 3600     # CBOE CSV（6 小时）
+_TTL_VIX = 3600        # CBOE CSV（1 小时；force 可穿透）
 
 
 def _sess():
@@ -261,14 +261,21 @@ def _parse_s_idx(parts: list) -> dict:
 
 
 def _parse_nf(parts: list) -> dict:
-    """内盘期货 nf_：只在快照里取「最新价」，涨跌幅改用日K推算（不猜字段含义）。
+    """内盘期货 nf_ 快照。
 
-    实测（2026-10-30 IF0 收盘 3928.0）：field[3] 与日K close 相等 → 即最新价。
+    实测字段（2026-11-06 T0 验证）：[0]开 [1]高 [2]低 [3]最新 [4]量 [5]额 [6]持仓
+    [13]昨结算（与日K上一根 close 完全一致）[36]日期 [37]时间。
+    ★ 有了 [13] 就能直接算当日涨跌，不必依赖「日K 是否含今天」——
+      新浪内盘日K 盘中不生成当天K线，只靠日K 会把涨跌幅显示成昨天的。
     """
-    return {"price": _f(parts[3]),
+    px = _f(parts[3])
+    prev = _f(parts[13]) if len(parts) > 13 else None
+    return {"price": px, "prev": prev,
             "open": _f(parts[0]), "high": _f(parts[1]), "low": _f(parts[2]),
-            "volume": _f(parts[4]), "amount": _f(parts[5]),
-            "hold": _f(parts[6])}
+            "volume": _f(parts[4]), "amount": _f(parts[5]), "hold": _f(parts[6]),
+            "pct": (px / prev - 1) * 100 if (px and prev) else None,
+            "date": (parts[36] if len(parts) > 36 else ""),
+            "time": (parts[37] if len(parts) > 37 else "")}
 
 
 def _f(v) -> Optional[float]:
@@ -352,12 +359,24 @@ def _bars(rows: list) -> list:
     return out
 
 
-def _cboe(sym: str = "VIX") -> list:
-    """CBOE 官方日线 CSV。缓存 6 小时落盘（约 470KB，避免每次都拉）。"""
+def _cboe(sym: str = "VIX", force: bool = False) -> list:
+    """CBOE 官方日线 CSV。缓存落盘，避免每次拉 470KB。
+
+    ★ force 必须能穿透落盘缓存：否则「刷新」按钮永远拿不到当日新数据
+      （2026-11-06 实测：CBOE 已更新到 11/05、VIX 从 16.6 跳到 28.2 暴涨 70%，
+       而页面还显示 11/04 的旧值 —— 就是被 6 小时落盘缓存挡住）。
+    """
     name = "cboe_%s.json" % sym.lower()
-    c = _cache_read(name, _TTL_VIX)
-    if c:
-        return c
+    if not force:
+        c = _cache_read(name, _TTL_VIX)
+        if c:
+            return c
+    else:
+        # ★ force 也给 10 分钟的保护：这两个 CSV 各 ~470KB / 200KB，单次要 5-6 秒。
+        #   CBOE 每天只更新一次，连续点「刷新」没必要反复下整份历史。
+        c = _cache_read(name, 600)
+        if c:
+            return c
     url = "https://cdn.cboe.com/api/global/us_indices/daily_prices/%s_History.csv" % sym
     rows = []
     try:
@@ -525,33 +544,29 @@ def _tx_kline(code: str, n: int = 2000) -> list:
     """腾讯 ifzq 日K（字段序 date,open,close,high,low,volume）—— 第 1 级源。
 
     ★ 实测上限 2000 根：n>2000 时接口返回空（不是截断），故超限自动降级到 1200。
-    ★ 腾讯会整体限流（2026-10-30 实测：hkHSI / sh000001 同时返回空），
-      因此本函数只负责「把腾讯取到」，多级降级由 _fetch_hist 统一编排。
+    ★ **不做内部重试**：腾讯限流时是「整体返回空」，重试只会白等 0.5s/次。
+      实测 force 冷启动 18 个源原本要 23s，去掉重试后降到 ~10s；
+      失败由 `_fetch_hist` 的多级降级链接手（雪球/新浪），那里才有健康度记忆。
     """
-    for nn in ([n] if n <= 2000 else [2000, 1200]):
-        url = ("https://ifzq.gtimg.cn/appstock/app/fqkline/get?param=%s,day,,,%d,qfq"
-               % (code, max(int(nn), 60)))
-        for attempt in range(2):
-            try:
-                txt = _http(url, timeout=18)
-                j = json.loads(txt or "{}")
-            except Exception:  # noqa: BLE001
-                j = {}
-            node = (j.get("data") or {}).get(code) or {}
-            rows = node.get("qfqday") or node.get("day") or []
-            buf = []
-            for r in rows:
-                try:
-                    buf.append({"date": str(r[0])[:10], "open": float(r[1]), "close": float(r[2]),
-                                "high": float(r[3]), "low": float(r[4]),
-                                "volume": float(r[5]) if len(r) > 5 else 0.0, "hold": 0.0})
-                except (TypeError, ValueError, IndexError):
-                    continue
-            if buf:
-                return _bars(buf)
-            if attempt == 0:
-                time.sleep(0.5)
-    return []
+    nn = n if n <= 2000 else 2000
+    url = ("https://ifzq.gtimg.cn/appstock/app/fqkline/get?param=%s,day,,,%d,qfq"
+           % (code, max(int(nn), 60)))
+    try:
+        txt = _http(url, timeout=12)
+        j = json.loads(txt or "{}")
+    except Exception:  # noqa: BLE001
+        return []
+    node = (j.get("data") or {}).get(code) or {}
+    rows = node.get("qfqday") or node.get("day") or []
+    buf = []
+    for r in rows:
+        try:
+            buf.append({"date": str(r[0])[:10], "open": float(r[1]), "close": float(r[2]),
+                        "high": float(r[3]), "low": float(r[4]),
+                        "volume": float(r[5]) if len(r) > 5 else 0.0, "hold": 0.0})
+        except (TypeError, ValueError, IndexError):
+            continue
+    return _bars(buf)
 
 
 _HIST_STALE: dict = {}
@@ -602,11 +617,11 @@ def _src_note(name: str, ok: bool, now: float) -> None:
                 _SRC_COOL[name] = now + 600.0
 
 
-def _fetch_hist(a: dict) -> list:
+def _fetch_hist(a: dict, force: bool = False) -> list:
     """多级降级取历史日K：按实时健康度在 雪球 / 腾讯 / 新浪 之间切换。"""
     k = a["kind"]
     if k == "cboe":
-        return _cboe(a["sym"])
+        return _cboe(a["sym"], force=force)
     if k == "sina_gf":
         return _sina_global(a["sym"])
     if k == "sina_inner":
@@ -652,7 +667,7 @@ def history(key: str, force: bool = False) -> list:
         if hit and not force and now - hit[0] < _ttl_hist():
             return hit[1]
 
-    bars = _fetch_hist(a)
+    bars = _fetch_hist(a, force=force)
     if bars:
         _cache_write("hist_%s.json" % key, bars[-2400:])
         with _LOCK:
@@ -676,30 +691,268 @@ def history(key: str, force: bool = False) -> list:
     return []
 
 
+# ============ 分时（分钟线）============
+# 为什么必须补这一层
+# ----------------
+# A50 与布伦特是**跨时段**品种：A 股 15:00 收盘后它们还在动，而日线要到次日
+# 才生成新的一根。只靠「快照价 vs 昨收」看不出「收盘后这段涨了多少」，
+# 而那恰恰是次日开盘最直接的先行信息。
+#
+# 数据源（2026-11-06 实测）：
+# · 外盘：GlobalFuturesService.getGlobalFuturesMinLine（1 分钟，含 T+1 时段）
+#   ★ 首行是 10 字段的「段落头」（日期/交易所/起始时间/…），后续行才是 6 字段，
+#     直接按 6 字段解析会把首行错位成 ["2026-11-07", "12752.000", ...]。
+# · 内盘：InnerFuturesNewService.getFewMinLine?type=1（1 分钟 K，返回最近几天）
+_MIN_JSONP = re.compile(r"var\s+_\s*=\s*\((.*)\)\s*;?\s*$", re.S)
+_MIN_CACHE: dict = {}
+_TTL_MIN = 60.0
+
+
+def _jsonp(txt: str):
+    if not txt:
+        return None
+    m = _MIN_JSONP.search(txt.strip())
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return None
+
+
+def _min_outer(sym: str) -> list:
+    # ★ 这里不能用 % 格式化：URL 里的 `var%20_=` 含 %2，会被当成格式符报
+    #   "unsupported format character '_'"。用字符串拼接。
+    url = ("https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20_=/"
+           "GlobalFuturesService.getGlobalFuturesMinLine?symbol=" + sym)
+    txt = _http(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=15)
+    data = _jsonp(txt)
+    if not isinstance(data, dict):
+        return []
+    rows = data.get("minLine_1d") or []
+    out = []
+    for r in rows:
+        if not isinstance(r, list) or len(r) < 2:
+            continue
+        if len(r) >= 10:
+            # 段落头：["2026-11-07", 开?, "sgxq", "", "17:00", 价, 量, 持仓, 均价, 时间戳]
+            px, tm, ts = _f(r[5]), str(r[4]), str(r[9])
+        elif len(r) >= 6:
+            # 常规行：["17:01", 价, 量, 持仓, 均价, 时间戳]
+            px, tm, ts = _f(r[1]), str(r[0]), str(r[5])
+        else:
+            continue
+        if px is None:
+            continue
+        out.append({"t": tm[-5:] if len(tm) >= 5 else tm, "p": px, "ts": ts})
+    return out
+
+
+def _min_inner(sym: str) -> list:
+    url = ("https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20_=/"
+           "InnerFuturesNewService.getFewMinLine?symbol=" + sym + "&type=1")
+    txt = _http(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=15)
+    data = _jsonp(txt)
+    if not isinstance(data, list):
+        return []
+    out = []
+    for r in data:
+        if not isinstance(r, dict):
+            continue
+        d = str(r.get("d") or "")
+        px = _f(r.get("c"))
+        if not d or px is None:
+            continue
+        out.append({"t": d[11:16], "p": px, "ts": d, "date": d[:10],
+                    "v": _f(r.get("v"))})
+    return out
+
+
+def _minute_of(t) -> Optional[int]:
+    """把 "15:00" / "9:05" 转成当日分钟数。解析不了返回 None。
+
+    ★ 不要直接拿字符串比大小：`"9:05" >= "15:00"` 在字典序下是 **True**
+      （因为 '9' > '1'），一条没补零的时间戳会被判成「下午三点之后」，
+      整个隔夜段的基准点就跑偏了。转成分钟数比较才稳。
+    """
+    try:
+        parts = str(t or "").strip().split(":")
+        if len(parts) < 2:
+            return None
+        h, m = int(parts[0]), int(parts[1])
+        if not (0 <= h <= 24 and 0 <= m < 60):
+            return None
+        return h * 60 + m
+    except (ValueError, TypeError):
+        return None
+
+
+def _overnight(points: list) -> Optional[dict]:
+    """A 股收盘（15:00）之后到最新一笔的涨跌 —— 这才是「隔夜漂移」。
+
+    ★ 不能用「最后一个日期」来圈定范围：布伦特 ICE 时段是 09:00 → 次日 06:00（北京时间），
+      凌晨以后数据里的 `ts[:10]` 已经是**第二天**，而第二天当然没有 15:00 的点，
+      于是每天 00:00~15:00 这段时间里「隔夜漂移」会凭空消失（实测 00:15 踩到）。
+      正确做法：找「时间从 <15:00 跨进 >=15:00」的那个边界点，取最后一个。
+      这样无论数据跨不跨日，基准都落在最近的 15:00（或该时段的第一个点，如 A50 的 17:00）。
+    """
+    if not points:
+        return None
+    base = None
+    prev_mm = -1
+    for i, p in enumerate(points):
+        mm = _minute_of(p.get("t"))
+        if mm is None:
+            continue
+        if mm >= 900 and prev_mm < 900:      # 900 = 15:00
+            base = p
+        prev_mm = mm
+    if base is None:
+        return None
+    last = points[-1]
+    bp, lp = base["p"], last["p"]
+    if not (bp and lp):
+        return None
+    hours = None
+    try:
+        a = _dt.datetime.strptime(str(base.get("ts"))[:19], "%Y-%m-%d %H:%M:%S")
+        b = _dt.datetime.strptime(str(last.get("ts"))[:19], "%Y-%m-%d %H:%M:%S")
+        hours = round((b - a).total_seconds() / 3600.0, 1)
+    except (ValueError, TypeError):
+        pass
+    return {"base_time": base["t"], "base_price": bp, "last_price": lp,
+            "pct": round((lp / bp - 1) * 100, 3), "hours": hours,
+            "base_date": str(base.get("ts") or "")[:10],
+            "date": str(last.get("ts") or "")[:10]}
+
+
+def mins(key: str, force: bool = False) -> dict:
+    """单指标分时。A50 / 布伦特走外盘接口，IF/IH/IC/IM/T 走内盘接口。"""
+    a = AMAP.get(key)
+    if not a:
+        return {"ok": False, "err": "未知指标", "points": []}
+    sym = a.get("sym") or ""
+    if a["kind"] not in ("sina_gf", "sina_inner"):
+        return {"ok": False, "err": "%s 无分时数据（指数日线口径）" % a["short"],
+                "points": []}
+    now = time.time()
+    with _LOCK:
+        hit = _MIN_CACHE.get(key)
+        if hit and not force and now - hit[0] < _TTL_MIN:
+            return hit[1]
+
+    try:
+        pts = _min_outer(sym) if a["kind"] == "sina_gf" else _min_inner(sym)
+    except Exception as e:  # noqa: BLE001
+        pts = []
+        err = str(e)[:120]
+    else:
+        err = ""
+
+    if not pts:
+        return {"ok": False, "err": err or "分时源暂不可用", "key": key,
+                "name": a["name"], "short": a["short"], "points": []}
+
+    # 内盘接口返回好几天 → 只留最后一个交易日
+    if a["kind"] == "sina_inner":
+        last_day = str(pts[-1].get("ts") or "")[:10]
+        pts = [p for p in pts if str(p.get("ts") or "")[:10] == last_day]
+
+    # 降采样到 ≤240 点，前端 sparkline 不需要 1000 个点
+    step = max(1, len(pts) // 240)
+    thin = pts[::step]
+    if thin and thin[-1] is not pts[-1]:
+        thin.append(pts[-1])
+
+    first_p = pts[0]["p"]
+    ov = _overnight(pts) if a["kind"] == "sina_gf" else None
+    res = {"ok": True, "key": key, "name": a["name"], "short": a["short"],
+           "dec": a.get("dec", 2), "unit": a.get("unit", ""),
+           "points": [{"t": p["t"], "p": round(p["p"], a.get("dec", 2) + 1)}
+                      for p in thin],
+           "n": len(pts),
+           "day": str(pts[-1].get("ts") or "")[:10],
+           "first": first_p, "last": pts[-1]["p"],
+           "intraday_pct": round((pts[-1]["p"] / first_p - 1) * 100, 3) if first_p else None,
+           "overnight": ov,
+           "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with _LOCK:
+        _MIN_CACHE[key] = (now, res)
+    return res
+
+
 # 首屏预热清单（并发拉取，避免 10 个源串行等 20s+）
 _PREFETCH = ["vix", "vix9d", "brent", "a50", "hsi", "hstech",
              "sh000001", "sh000300", "sh000016", "sh000905", "sh000852",
              "sz399006", "sh000688", "IF0", "IH0", "IC0", "IM0", "T0"]
 
 
-def prefetch(keys: Optional[list] = None, workers: int = 6) -> None:
-    """并发预热历史日K（已缓存的 key 会直接命中，不发请求）。"""
+def prefetch(keys: Optional[list] = None, workers: int = 8, force: bool = False) -> None:
+    """并发预热历史日K（已缓存的 key 会直接命中，不发请求）。
+
+    ★ 每完成一个源就更新一次进度，前端轮询 `/api/idxhub/progress` 画进度条。
+      用户看不到「卡在 0% 三秒」的空白，才知道程序在干活。
+    """
     ks = keys or _PREFETCH
     todo = []
     now = time.time()
     for k in ks:
         with _LOCK:
             hit = _HIST_CACHE.get(k)
-        if not (hit and now - hit[0] < _ttl_hist()):
+        if force or not (hit and now - hit[0] < _ttl_hist()):
             todo.append(k)
     if not todo:
+        _prog(1, 1, "本地缓存已就绪", active=False)
         return
+    total = len(todo)
+    _prog(0, total, "准备拉取 %d 个数据源" % total)
+    done = [0]
+    lk = threading.Lock()
+
+    def _one(k):
+        try:
+            history(k, force=force)
+        finally:
+            with lk:
+                done[0] += 1
+                _prog(done[0], total, "已拉取 %d/%d · %s"
+                      % (done[0], total, AMAP[k]["short"]))
+
     from concurrent.futures import ThreadPoolExecutor
     try:
-        with ThreadPoolExecutor(max_workers=min(workers, len(todo))) as ex:
-            list(ex.map(history, todo))
+        with ThreadPoolExecutor(max_workers=min(workers, total)) as ex:
+            list(ex.map(_one, todo))
     except Exception:  # noqa: BLE001 —— 预热失败不影响后续按需拉取
         pass
+    _prog(total, total, "数据已就绪", active=False)
+
+
+# ============ 拉取进度（前端轮询画进度条） ============
+_PROG = {"done": 0, "total": 0, "msg": "", "ts": 0.0, "active": False}
+
+
+def _prog(done: int, total: int, msg: str, active: bool = True) -> None:
+    with _LOCK:
+        _PROG.update({"done": int(done), "total": int(total), "msg": str(msg),
+                      "ts": time.time(), "active": bool(active)})
+
+
+def progress() -> dict:
+    with _LOCK:
+        p = dict(_PROG)
+    if p["active"] and time.time() - p["ts"] > 40:
+        p["active"] = False          # 异常中断的兜底：40 秒没动静就当结束
+    p["pct"] = round(p["done"] / p["total"] * 100, 1) if p["total"] else 0.0
+    return p
+
+
+def mark_start(msg: str = "正在连接数据源…") -> None:
+    """请求一进来就把进度置为 active。
+
+    ★ 不置的话，前端第一次轮询（220ms）读到的还是「上一次已完成」的状态
+      → 进度条刚显示就被收起，用户根本看不到（2026-11-06 实测踩到）。
+    """
+    _prog(0, 1, msg)
 
 
 # ============ 指标计算 ============
@@ -759,14 +1012,23 @@ def _align_prev(src_dates: list, src_vals: np.ndarray, targets: list) -> np.ndar
     return out
 
 
-def _align_same(src_dates: list, src_vals: np.ndarray, targets: list) -> np.ndarray:
-    """同日对齐（同市场同时段）。"""
+def _align_same(src_dates: list, src_vals: np.ndarray, targets: list,
+                ffill: bool = True) -> np.ndarray:
+    """同日对齐。
+
+    `ffill=True`（默认）：目标日找不到就用**前一个交易日的值**。
+      这是跨市场对齐必须的 —— 港股休市而 A 股开市时，港股的价格就是前收，
+      留 NaN 会让 HSI/恒生科技整条序列断掉。
+    `ffill=False`：严格同日，找不到就 NaN。
+      ★ 期现基差必须用这个：期货缺一天却拿前一天的期货价去配当天的现货价，
+        算出来的「基差」是两个不同时点的价差，比缺数据更糟。
+    """
     out = np.full(len(targets), np.nan)
     for i, d in enumerate(targets):
         j = bisect.bisect_left(src_dates, d)
         if j < len(src_dates) and src_dates[j] == d:
             out[i] = src_vals[j]
-        elif j - 1 >= 0:
+        elif ffill and j - 1 >= 0:
             out[i] = src_vals[j - 1]
     return out
 
@@ -774,8 +1036,19 @@ def _align_same(src_dates: list, src_vals: np.ndarray, targets: list) -> np.ndar
 def _basis(spot_bars: list, fut_bars: list) -> dict:
     """期现基差序列：同日对齐，返回 dict of arrays。
 
-    主连换月跳空检测：当日基差相对前一日跳变 >1.2pp 且「期货涨跌幅 − 现货涨跌幅」
-    的绝对值 <0.4pp（说明价格没动、是合约换了）→ 标记 rollover，信号不使用该点。
+    主连换月跳空检测
+    ----------------
+    ★ 旧判据 `|Δbasis| > 1.2 且 |fpct − spct| < 0.4` 是**恒不成立**的：
+      因为 basis_pct = (F/S − 1)×100，一阶展开就有 Δbasis_pct ≈ fpct − spct，
+      两个条件互相排斥。实测四个品种各 2000 个交易日，命中 **0 次** ——
+      也就是说「换月跳空会被检测并剔除」这句话从来没兑现过，
+      `_sig_basis_extreme` 里那句 `if b["roll"][i]: continue` 一直是死代码。
+
+    新判据：换月是「基差水平的**持久位移**」，而真实的大波动会回归。
+      跳变日之后 4 天的基差中位数 − 之前 4 天的中位数，若与跳变同号、
+      且保留了跳变幅度的 70% 以上，才判为换月。
+      实测命中 IF 6 / IH 7 / IC 9 / IM 12 次（2000 天），
+      即「价差大到足以污染基差」的那几次，而不是每月无差别标记。
     """
     sd, sp, *_ = _series(spot_bars)
     fd, fp, _fh, _fl, fhold = _series(fut_bars)
@@ -803,11 +1076,28 @@ def _basis(spot_bars: list, fut_bars: list) -> dict:
     if n > 1:
         spct[1:] = (s_arr[1:] / s_arr[:-1] - 1) * 100
         fpct[1:] = (f_arr[1:] / f_arr[:-1] - 1) * 100
+
+    ROLL_THR = 1.2          # 基差跳变阈值（pp）
+    ROLL_SUSTAIN = 0.7      # 位移至少保留跳变幅度的 70%
+    ROLL_WIN = 4
     rollover = np.zeros(n, dtype=bool)
-    if n > 1:
-        d_bs = np.abs(np.diff(basis_pct))
-        d_px = np.abs(np.nan_to_num(fpct[1:] - spct[1:]))
-        rollover[1:] = (np.nan_to_num(d_bs) > 1.2) & (d_px < 0.4)
+    for i in range(1, n):
+        jump = basis_pct[i] - basis_pct[i - 1]
+        if not np.isfinite(jump) or abs(jump) < ROLL_THR:
+            continue
+        pre = basis_pct[max(0, i - ROLL_WIN):i]
+        post = basis_pct[i:min(n, i + ROLL_WIN)]
+        pre = pre[np.isfinite(pre)]
+        post = post[np.isfinite(post)]
+        if len(pre) < 2 or len(post) < 2:
+            # 最后两天没有「未来窗口」，只能用更严的单边阈值兜底
+            if abs(jump) > 2.0:
+                rollover[i] = True
+            continue
+        shift = float(np.median(post) - np.median(pre))
+        if np.sign(shift) == np.sign(jump) and abs(shift) >= abs(jump) * ROLL_SUSTAIN:
+            rollover[i] = True
+
     # 平滑基差（5 日中位数）抑制换月残余噪声
     smooth = np.full(n, np.nan)
     for i in range(n):
@@ -824,6 +1114,78 @@ def _basis_rank(bp: np.ndarray, win: int = 750) -> np.ndarray:
     """基差分位的「绝对强度」：|basis_pct| 在历史上的分位（0~100）。"""
     ab = np.abs(bp)
     return _roll_pctile(ab, win)
+
+
+# ============ 合约到期日（年化基差的分母）============
+# ★ 原来按「剩余 30 天」固定近似，对 IF/IH/IC/IM 是同一个分母 —— 但四个品种的
+#   到期日相同（都是第三个周五），真正的错误在于**忽略了当月/次月的切换**：
+#   月初主力是当月（剩 20 天）、月末主力已移到次月（剩 40 天），
+#   一律用 30 天会让年化基差在换月前后凭空跳 ±30%。
+#   正确做法：① 有中金所当日成交数据 → 用成交量最大的合约（真主力）；
+#             ② 没有 → 用「第三个周五」+ 提前 7 个自然日移仓的规则推算。
+def _nth_friday(year: int, month: int, n: int = 3) -> _dt.date:
+    d = _dt.date(year, month, 1)
+    return d + _dt.timedelta(days=(4 - d.weekday()) % 7 + 7 * (n - 1))
+
+
+def _next_month(year: int, month: int) -> tuple:
+    return (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def _cffex_cached() -> Optional[dict]:
+    """读中金所日行情的**落盘缓存**（绝不触网）。期权模块拉过一次就有了。"""
+    today = _dt.date.today()
+    for back in range(0, 12):
+        d = today - _dt.timedelta(days=back)
+        c = _cache_read_any("cffex_%s.json" % d.strftime("%Y%m%d"))
+        if c:
+            return c
+    return None
+
+
+def _contract_of(fk: str) -> dict:
+    """当前主力合约与剩余到期天数。
+
+    返回 {code, yymm, expiry, days, src}
+    src = 'cffex'（成交量最大，实测口径）或 'rule'（第三个周五规则推算）
+    """
+    today = _dt.date.today()
+    pre = fk.rstrip("0")            # IF0 → IF
+    cached = _cffex_cached()
+    if cached:
+        fl = (cached.get("futures") or {}).get(pre, [])
+        if fl:
+            main = max(fl, key=lambda x: x.get("vol") or 0)
+            yymm = main.get("yymm") or ""
+            try:
+                y, m = 2000 + int(yymm[:2]), int(yymm[2:4])
+                exp = _nth_friday(y, m)
+                # 已过到期日 → 说明缓存是旧的，退回规则推算
+                if (exp - today).days >= 0:
+                    return {"code": main.get("code"), "yymm": yymm,
+                            "expiry": exp.isoformat(), "days": (exp - today).days,
+                            "src": "cffex"}
+            except (ValueError, IndexError):
+                pass
+    # 规则推算：当月第三个周五前 7 天内视为已移仓到次月
+    exp = _nth_friday(today.year, today.month)
+    roll = 7
+    if (exp - today).days < roll:
+        y, m = _next_month(today.year, today.month)
+        exp = _nth_friday(y, m)
+    return {"code": "%s%02d%02d" % (pre, exp.year % 100, exp.month), "yymm": "",
+            "expiry": exp.isoformat(), "days": (exp - today).days, "src": "rule"}
+
+
+def _ann_basis(basis_pct: Optional[float], days: Optional[int]) -> tuple:
+    """年化基差（线性，ACT/365）。返回 (值, 是否可展示)。
+
+    ★ 剩余 <3 个自然日时年化会把噪声放大 100 倍以上（0.05% 的基差能算出 6%），
+      此时年化没有意义 → 返回 None，由前端显示「临近交割」而不是一个假数字。
+    """
+    if basis_pct is None or not days or days < 3:
+        return None, False
+    return round(basis_pct * 365.0 / days, 2), True
 
 
 # ============ 维度打分（0~100，越高越危险） ============
@@ -894,6 +1256,372 @@ BASE_W = {"panic": 0.20, "commodity": 0.13, "basis": 0.17,
           "cross": 0.18, "trend": 0.22, "policy": 0.10}
 DIM_NAME = {"panic": "恐慌情绪", "commodity": "商品冲击", "basis": "期现结构",
             "cross": "跨境分歧", "trend": "境内趋势", "policy": "政策流动性"}
+DIM_KEYS = ("panic", "commodity", "basis", "cross", "trend", "policy")
+
+
+# ============ 权重标定（把「经验设定」换成「可核对的数字」）============
+# 原本 6 维权重是拍出来的。拍出来的东西不一定错，但**必须知道它到底有没有信息**。
+# 这里的做法与局限都写清楚：
+#   · 目标函数：温度与未来 20 日沪深300 收益的 Spearman 秩相关（IC）。
+#     温度越高越危险 ⇒ IC 应当为**负**。IC ≈ 0 就是没有预测力。
+#   · 搜索：在 6 维单纯形上做 Dirichlet 随机采样（混合「全空间」与「经验值附近」），
+#     取训练集 |IC| 最大者。
+#   · 验证：**时间序列样本外**（前 70% 训练 / 后 30% 测试，中间留 20 日隔离带，
+#     避免训练集的未来收益窗口与测试集重叠造成信息泄漏）。
+#   · 若样本外 IC 没有改善、或符号翻转，就直说「权重不可辨识」，
+#     并把经验权重继续当作默认 —— 不拿样本内最优冒充有效。
+def _rank_np(x: np.ndarray) -> np.ndarray:
+    """向量化秩（并列取平均秩），用于 Spearman。"""
+    n = len(x)
+    if n == 0:
+        return x
+    order = np.argsort(x, kind="mergesort")
+    sx = x[order]
+    diff = np.r_[True, sx[1:] != sx[:-1]]
+    gidx = np.cumsum(diff) - 1
+    counts = np.bincount(gidx)
+    cum = np.cumsum(counts)
+    start = cum - counts
+    avg = start + (counts - 1) / 2.0
+    out = np.empty(n, dtype=float)
+    out[order] = avg[gidx]
+    return out
+
+
+def _pearson(a: np.ndarray, b: np.ndarray) -> float:
+    # ★ 长度不等要返回 nan 而不是让 numpy 抛 ValueError：
+    #   这个函数被 _ic / _corr 调用，上游理论上已对齐，但边界处不该靠上游保证。
+    if len(a) < 3 or len(a) != len(b):
+        return float("nan")
+    sa, sb = np.std(a), np.std(b)
+    if sa < 1e-12 or sb < 1e-12:
+        return float("nan")
+    return float(np.mean((a - a.mean()) * (b - b.mean())) / (sa * sb))
+
+
+def _ic(temp: np.ndarray, ret_rank: np.ndarray, mask: np.ndarray) -> float:
+    """温度与未来收益的秩相关（只用 mask 内的样本）。"""
+    t = temp[mask]
+    r = ret_rank[mask]
+    if len(t) < 50:
+        return float("nan")
+    return _pearson(_rank_np(t), r)
+
+
+def _dim_matrix(env: dict, min_i: int = 260) -> tuple:
+    """逐日算出 6 维分数矩阵 D（n×6）。与实时判定共用 _dim_scores，口径一致。"""
+    n = len(env["dates"])
+    D = np.full((n, len(DIM_KEYS)), np.nan)
+    for i in range(min_i, n):
+        try:
+            d = _dim_scores(env, i)
+        except Exception:  # noqa: BLE001
+            continue
+        for j, k in enumerate(DIM_KEYS):
+            D[i, j] = d.get(k, np.nan)
+    return D
+
+
+_CALIB_CACHE: dict = {"ts": 0.0, "data": None}
+_CALIB_TTL = 12 * 3600
+# ★ 缓存文件名带版本：结果结构变了必须换名，否则 12 小时里读到的还是旧结论
+#   （加多期限/滚动折时踩过：新判决写了但页面显示的还是旧的「标定能掰正」）
+_CALIB_FILE = "calib_weights_v3.json"
+
+
+def calibrate(force: bool = False, n_search: int = 4000, horizon: int = 20) -> dict:
+    """风险温度权重的历史标定（含样本外检验）。结果落盘，12 小时有效。"""
+    now = time.time()
+    with _LOCK:
+        c = _CALIB_CACHE["data"]
+        if not force and c and now - _CALIB_CACHE["ts"] < _CALIB_TTL:
+            return c
+    if not force:
+        disk = _cache_read(_CALIB_FILE, _CALIB_TTL)
+        if disk:
+            with _LOCK:
+                _CALIB_CACHE["ts"], _CALIB_CACHE["data"] = now, disk
+            return disk
+
+    t0 = time.time()
+    env = build_env(force=force)
+    if not env:
+        return {"ok": False, "err": "历史数据不足，无法标定"}
+    close = env["hs300"]
+    n = len(close)
+    D = _dim_matrix(env)
+    # 未来 horizon 日收益（只用当日及之后可知的数据，不构成未来函数）
+    fwd = np.full(n, np.nan)
+    if n > horizon:
+        fwd[: n - horizon] = close[horizon:] / close[: n - horizon] - 1
+    # ★ 多期限：5 / 20 / 60 日各算一条。同一组权重在不同期限上的表现可能**方向相反**
+    #   （20 日偏反转、60 日偏趋势），只报一个期限等于挑好看的给用户看。
+    FWDS = {}
+    for _h in (5, 20, 60):
+        _f = np.full(n, np.nan)
+        if n > _h:
+            _f[: n - _h] = close[_h:] / close[: n - _h] - 1
+        FWDS[_h] = _f
+    valid = np.isfinite(fwd) & np.all(np.isfinite(D), axis=1)
+    if valid.sum() < 400:
+        return {"ok": False, "err": "有效样本不足（%d 天），无法标定" % int(valid.sum())}
+
+    ret_rank = _rank_np(np.nan_to_num(fwd))
+    idx_valid = np.where(valid)[0]
+    cut = int(len(idx_valid) * 0.7)
+    train_end = idx_valid[cut - 1]
+    # ★ 隔离带：训练集最后一个样本的未来窗口不能压到测试集上
+    train_mask = np.zeros(n, dtype=bool)
+    train_mask[idx_valid[0]: max(train_end - horizon, idx_valid[0] + 1)] = True
+    test_mask = np.zeros(n, dtype=bool)
+    test_mask[idx_valid[cut]: idx_valid[-1] + 1] = True
+
+    base_w = np.array([BASE_W[k] for k in DIM_KEYS], dtype=float)
+    base_t = D @ base_w
+    base_in = _ic(base_t, ret_rank, train_mask)
+    base_out = _ic(base_t, ret_rank, test_mask)
+    base_all = _ic(base_t, ret_rank, valid)
+
+    # Dirichlet 采样：一半全空间、一半贴近经验值（避免采到全是一维的极端权重）
+    rng = np.random.default_rng(20261106)
+    half = n_search // 2
+    W1 = rng.dirichlet(np.ones(len(DIM_KEYS)), size=half)
+    W2 = rng.dirichlet(base_w * 40.0, size=n_search - half)
+    W = np.vstack([W1, W2])
+    # ★ 单维权重上限 0.35。不加约束时最优解会把 82% 押在 commodity 一个维度上
+    #   （2026-11-06 实测），那是过拟合的典型形态：样本外 IC 好看，但换一段数据就散。
+    MAX_W = 0.35
+    keep = W.max(axis=1) <= MAX_W
+    if keep.sum() < 300:                     # 采到的合规解太少 → 补采
+        extra = rng.dirichlet(np.ones(len(DIM_KEYS)), size=n_search)
+        W = np.vstack([W[keep], extra[extra.max(axis=1) <= MAX_W]])
+    else:
+        W = W[keep]
+    if len(W) < 50:
+        return {"ok": False, "err": "权重采样失败（约束过严）"}
+
+    Dtr = D[train_mask]
+    rtr = ret_rank[train_mask]
+    if len(Dtr) < 200:
+        return {"ok": False, "err": "训练样本不足"}
+    temp_all = Dtr @ W.T                        # (n_train, n_search)
+    # 逐列算秩相关：样本量不大（~1300），直接循环比造三维数组更省内存
+    ics = np.full(W.shape[0], np.nan)
+    for j in range(W.shape[0]):
+        ics[j] = _pearson(_rank_np(temp_all[:, j]), rtr)
+    if not np.isfinite(ics).any():
+        return {"ok": False, "err": "权重搜索全部失效（数据退化）"}
+    # ★ 温度越高越危险 ⇒ IC 应为负，所以取最小（最负）的那组
+    best_j = int(np.nanargmin(ics))
+    best_w = W[best_j]
+    best_t = D @ best_w
+    best_in = _ic(best_t, ret_rank, train_mask)
+    best_out = _ic(best_t, ret_rank, test_mask)
+    best_all = _ic(best_t, ret_rank, valid)
+
+    # 分档检验（比 IC 更好懂）：按温度分 5 档，看未来 20 日平均收益是否单调
+    def _buckets(temp):
+        tt = temp[valid]
+        rr = np.nan_to_num(fwd)[valid] * 100
+        qs = np.quantile(tt, [0.2, 0.4, 0.6, 0.8])
+        lab = np.digitize(tt, qs)
+        out = []
+        for b in range(5):
+            m = lab == b
+            out.append({"n": int(m.sum()),
+                        "avg": round(float(rr[m].mean()), 2) if m.sum() else None,
+                        "win": round(float((rr[m] > 0).mean() * 100), 1) if m.sum() else None})
+        return out
+
+    # 单维 IC：哪个维度真的有信息，哪个是纯噪声 —— 这个是标定最该给出的东西
+    single = []
+    for j, k in enumerate(DIM_KEYS):
+        dj = D[:, j]
+        m = valid & np.isfinite(dj)
+        single.append({"key": k, "name": DIM_NAME[k],
+                       "ic_all": round(_ic(dj, ret_rank, m), 4),
+                       "ic_out": round(_ic(dj, ret_rank, m & test_mask), 4)})
+    single.sort(key=lambda x: x["ic_all"])
+
+    # 分年度 IC（看稳定性，而不是只看全样本一个数）
+    years = np.array([int(str(d)[:4]) for d in env["dates"]])
+    yearly = []
+    for y in sorted(set(years[valid].tolist())):
+        m = valid & (years == y)
+        if m.sum() < 60:
+            continue
+        yearly.append({"year": y, "n": int(m.sum()),
+                       "ic": round(_ic(base_t, ret_rank, m), 3),
+                       "ic_best": round(_ic(best_t, ret_rank, m), 3)})
+
+    # ---- 多期限：同一组权重在 5/20/60 日上的 IC ----
+    def _split_masks(mh, h):
+        """按某期限自己的有效样本重新切 70/30，隔离带宽度 = 该期限 h。"""
+        iv = np.where(mh)[0]
+        if len(iv) < 300:
+            return None, None
+        c = int(len(iv) * 0.7)
+        te_end = iv[c - 1]
+        tr = np.zeros(n, dtype=bool)
+        tr[iv[0]: max(te_end - h, iv[0] + 1)] = True
+        tm = np.zeros(n, dtype=bool)
+        tm[iv[c]: iv[-1] + 1] = True
+        return tr, tm
+
+    multi = []
+    for h in (5, 20, 60):
+        fh = FWDS[h]
+        mh = np.isfinite(fh) & np.all(np.isfinite(D), axis=1)
+        rh = _rank_np(np.nan_to_num(fh))
+        tr_m, te_m = _split_masks(mh, h)
+        if tr_m is None:
+            multi.append({"h": h, "n": int(mh.sum())})
+            continue
+        multi.append({"h": h, "n": int(mh.sum()),
+                      "base_in": round(_ic(base_t, rh, tr_m), 4),
+                      "base_out": round(_ic(base_t, rh, te_m), 4),
+                      "base_all": round(_ic(base_t, rh, mh), 4),
+                      "best_in": round(_ic(best_t, rh, tr_m), 4),
+                      "best_out": round(_ic(best_t, rh, te_m), 4),
+                      "best_all": round(_ic(best_t, rh, mh), 4)})
+
+    # ---- 滚动多折（expanding window，3 折）----
+    # 单一段 70/30 的结论很容易是「刚好这一段如此」。这里把测试期切成 3 段，
+    # 每段都用它之前的数据当训练，看 best 权重是否**每一折都同号**。
+    walk = []
+    iv = np.where(valid)[0]
+    m_all = len(iv)
+    if m_all >= 500:
+        edges = [int(m_all * (0.45 + 0.15 * i)) for i in range(4)]
+        for i in range(3):
+            a, b = edges[i], min(edges[i + 1], m_all - 1)
+            if b - a < 40:
+                continue
+            tr_end = max(a - horizon, 1)
+            te = np.zeros(n, dtype=bool)
+            te[iv[a]: iv[b] + 1] = True
+            walk.append({
+                "fold": i + 1,
+                "train": [env["dates"][int(iv[0])], env["dates"][int(iv[tr_end])]],
+                "test": [env["dates"][int(iv[a])], env["dates"][int(iv[b])]],
+                "n_test": int(te.sum()),
+                "base_out": round(_ic(base_t, ret_rank, te), 4),
+                "best_out": round(_ic(best_t, ret_rank, te), 4),
+            })
+
+    # ---- 判决：先看经验权重的**方向**，再谈优化 ----
+    b0, b5 = _buckets(base_t)[0], _buckets(base_t)[-1]
+    flipped = bool(np.isfinite(base_all) and base_all > 0.03)
+    walk_n = len(walk)
+    walk_best_neg = sum(1 for w in walk if (w.get("best_out") or 0) < 0)
+    walk_base_pos = sum(1 for w in walk if (w.get("base_out") or 0) > 0)
+    best_stable = (walk_n >= 2 and walk_best_neg >= walk_n - 1)
+    base_stable = (walk_n >= 2 and walk_base_pos == walk_n)
+    wb = " / ".join("%+.3f" % (w.get("best_out") or 0) for w in walk) if walk else "—"
+    wbase = " / ".join("%+.3f" % (w.get("base_out") or 0) for w in walk) if walk else "—"
+
+    if not np.isfinite(best_out) or abs(best_out) < 0.03:
+        grade = "none"
+        verdict = ("无论怎么调权重，样本外 IC 都接近零（best %+.3f）。"
+                   "结论：这 6 个维度拼起来对未来 20 日收益**没有可辨识的预测力**，"
+                   "温度只能当环境读数。" % (best_out if np.isfinite(best_out) else 0.0))
+    elif flipped:
+        grade = "flipped"
+        core = ("**经验权重的方向是反的，而且在滚动 %d 折里%s**：温度越高，未来 20 日收益"
+                "反而越好（全样本 IC %+.3f；最低温档均 %+.2f%%、胜率 %.0f%%，"
+                "最高温档均 %+.2f%%、胜率 %.0f%%；滚动测试期 IC 分别 %s）。"
+                "它在 A 股更像**均值回归指标**（恐慌尾部往往是反弹起点），"
+                "不是「越高越危险」的风险计。"
+                % (walk_n, "每一折都成立" if base_stable else "多数折成立",
+                   base_all, b0["avg"] or 0, b0["win"] or 0,
+                   b5["avg"] or 0, b5["win"] or 0, wbase))
+        if walk_n and not best_stable:
+            verdict = core + (
+                "但「用标定权重把方向掰正」这件事**没通过检验**：同样这 %d 折里，"
+                "标定权重的 IC 是 %s —— 只有 %d/%d 折是负的。"
+                "单一的 70/30 分割给出 %+.3f，那只是恰好落在唯一那段有效区间上。"
+                "所以结论是：温度可以当**反向读数**看，但**别用这组标定权重去做择时**。"
+                % (walk_n, wb, walk_best_neg, walk_n, best_out))
+        else:
+            verdict = core + (
+                "标定权重在 %d 折里同号且改善（%s），可以当作「把这套读数掰成能用的方向」"
+                "的一个参考，但绝对水平仍弱（样本外 %+.3f），不足以单独择时。"
+                % (walk_n, wb, best_out))
+    elif abs(best_out) > abs(base_out) * 1.15 and np.sign(best_out) == np.sign(base_out):
+        grade = "weak"
+        verdict = ("标定权重在样本外同号且改善（IC %+.3f → %+.3f），但绝对水平仍弱，"
+                   "只能作为环境读数的加权参考，不足以单独择时。"
+                   % (base_out, best_out))
+    else:
+        grade = "unstable"
+        verdict = ("标定权重在样本外**没有**跑赢经验权重（IC %+.3f → %+.3f），"
+                   "通常意味着维度间共线、或信号在样本外衰减。"
+                   "结论是「权重不可辨识」：继续用经验权重，但不要再声称它被优化过。"
+                   % (base_out, best_out))
+
+    # ---- 温度历史序列：让「71.3 高危」这个数字有参照 ----
+    # ★ 71.3 是不是「高」，取决于它在自己历史上排第几，而不是我拍的 70 分线。
+    #   这条序列用的是同一套 base 权重、同一份 env，所以与面板上的温度完全同源。
+    _all = [i for i in range(n) if np.isfinite(base_t[i])]
+    _tail = _all[-500:] if len(_all) > 500 else _all
+    temp_series = [{"d": env["dates"][int(i)], "v": round(float(base_t[int(i)]), 1)}
+                   for i in _tail]
+    cur_t = float(base_t[-1]) if np.isfinite(base_t[-1]) else None
+    temp_pct = temp_med = None
+    if cur_t is not None and temp_series:
+        tv = np.array([x["v"] for x in temp_series], dtype=float)
+        temp_pct = float((tv <= cur_t).mean() * 100)
+        temp_med = float(np.median(tv))
+
+    res = {
+        "ok": True,
+        "n_days": int(valid.sum()), "horizon": horizon,
+        "range": [env["dates"][int(idx_valid[0])], env["dates"][int(idx_valid[-1])]],
+        "split": {"train": [env["dates"][int(idx_valid[0])], env["dates"][int(train_end)]],
+                  "test": [env["dates"][int(idx_valid[cut])], env["dates"][int(idx_valid[-1])]],
+                  "gap_days": horizon},
+        "base": {"weights": {k: BASE_W[k] for k in DIM_KEYS},
+                 "ic_in": round(base_in, 4), "ic_out": round(base_out, 4),
+                 "ic_all": round(base_all, 4), "buckets": _buckets(base_t)},
+        "best": {"weights": {k: round(float(best_w[j]), 4) for j, k in enumerate(DIM_KEYS)},
+                 "ic_in": round(best_in, 4), "ic_out": round(best_out, 4),
+                 "ic_all": round(best_all, 4), "buckets": _buckets(best_t)},
+        "single": single,
+        "multi": multi,
+        "walk": walk,
+        "temp": {"now": round(cur_t, 1) if cur_t is not None else None,
+                 "pct": round(temp_pct, 1) if temp_pct is not None else None,
+                 "med": round(temp_med, 1) if temp_med is not None else None,
+                 "n": len(temp_series),
+                 "series": temp_series},
+        "max_weight": MAX_W,
+        "yearly": yearly,
+        "grade": grade, "verdict": verdict,
+        "n_search": int(n_search),
+        "elapsed": round(time.time() - t0, 2),
+        "method": [
+            "目标：温度与未来 N 日沪深300 收益的 Spearman IC（温度越高越危险 ⇒ 应为负）",
+            "搜索：6 维单纯形上 %d 组 Dirichlet 采样（半数为全空间、半数为经验值附近），"
+            "单维权重上限 %.0f%%" % (n_search, MAX_W * 100),
+            "验证①：时间序列 70/30 分割，中间留 %d 日隔离带，防止训练集的未来收益窗口压到测试集" % horizon,
+            "验证②：5 / 20 / 60 三个期限各算一遍 —— 方向一致才说明不是某个期限的偶然产物",
+            "验证③：滚动 3 折 expanding-window，看同一组权重是不是**每一折**都同号",
+            "判定：样本外 |IC| 需改善 15% 以上且同号，且滚动折不能大面积翻转",
+        ],
+        "caveats": [
+            "IC 是**全样本统计**，不等于任何单一时点可用；IC=-0.1 也意味着 45% 的时间方向是错的",
+            "5 / 20 / 60 日三个期限并列给出：只有方向一致，才说明信号不是某个期限的偶然产物；"
+            "若三个期限符号互相打架，就不存在「一个温度」这种说法",
+            "样本外给了 3 折 expanding-window（不再是单段），但折与折之间高度重叠，"
+            "独立性有限，仍不足以称为稳健",
+            "标定用的是「当前这 6 个维度」的组合，维度本身选得对不对，这里没有回答",
+        ],
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _cache_write(_CALIB_FILE, res)
+    with _LOCK:
+        _CALIB_CACHE["ts"], _CALIB_CACHE["data"] = now, res
+    return res
 
 
 def _weights(dims: dict, boost: dict) -> dict:
@@ -920,7 +1648,7 @@ def build_env(force: bool = False) -> dict:
     _, hs300, _, _, _ = _series(base)
 
     def _prep(key):
-        bars = history(key)
+        bars = history(key, force=force)
         if not bars:
             z = np.full(len(dates), np.nan)
             return z, z, z
@@ -974,20 +1702,20 @@ def build_env(force: bool = False) -> dict:
             continue
         b = _basis(sb, fb)
         # 把基差序列对齐到 A 股日期轴（期货与现货同市场，长度基本一致）
-        bp = _align_same(b["dates"], b["basis_pct"], dates)
-        sm = _align_same(b["dates"], b["smooth"], dates)
+        bp = _align_same(b["dates"], b["basis_pct"], dates, ffill=False)
+        sm = _align_same(b["dates"], b["smooth"], dates, ffill=False)
         roll = np.zeros(len(dates), dtype=bool)
         rd = b["dates"]
         for j, d in enumerate(rd):
             k = bisect.bisect_left(dates, d)
             if k < len(dates) and dates[k] == d:
                 roll[k] = bool(b["rollover"][j])
-        hold = _align_same(b["dates"], b["hold"], dates)
+        hold = _align_same(b["dates"], b["hold"], dates, ffill=False)
         env["basis"][fk] = {
             "pct": bp, "smooth": sm, "abs_rank": _basis_rank(bp), "roll": roll,
             "hold": hold, "hold_chg5": _ret(hold, 5),
-            "fpct": _align_same(b["dates"], b["fpct"], dates),
-            "spct": _align_same(b["dates"], b["spct"], dates),
+            "fpct": _align_same(b["dates"], b["fpct"], dates, ffill=False),
+            "spct": _align_same(b["dates"], b["spct"], dates, ffill=False),
             "under": ub,
         }
     with _LOCK:
@@ -1244,6 +1972,243 @@ SIGNALS = [
     {"id": "trend_break", "tag": "趋势", "level": "watch", "fn": _sig_trend_break,
      "title": "沪深300 中期趋势走坏（环境状态）"},
 ]
+
+
+# ============ 汇率与中美利差 ============
+# 为什么补这块
+# ------------
+# 原有「跨境分歧」维度只有「恒生与 A50 的日涨跌差」，那回答不了「外资为什么走」。
+# 汇率与中美利差才是跨境资金流动的直接约束：中美 10Y 倒挂 300bp 时，
+# 套息方向本身就决定了外资的倾向，港股一天的涨跌只是结果。
+#
+# ★ 这一块**不并入风险温度的 6 维权重**。理由很实在：改维度定义 = 推翻已有标定，
+#   而标定刚刚才用滚动 3 折验过、结论是不稳的。再动一次只会让前后两个版本
+#   的数字没法对比。所以它作为**独立环境读数**存在，并自带一条历史相关性检验，
+#   由用户自己判断要不要采信。
+_FX_CACHE: dict = {"ts": 0.0, "data": None}
+_FX_TTL = 6 * 3600
+
+
+def _fx_spot() -> dict:
+    """新浪外汇实时（在岸 fx_susdcny / 离岸 fx_susdcnh）。
+
+    字段：[0]时间 [1]买 [2]卖 [3]昨收 [4]量 [5]开 [6]高 [7]低 [8]最新 [9]名称
+          [10]涨跌幅% [11]涨跌额
+    """
+    out = {}
+    try:
+        txt = _http("https://hq.sinajs.cn/list=fx_susdcny,fx_susdcnh",
+                    headers={"Referer": "https://finance.sina.com.cn"}, enc="gbk", timeout=10)
+    except Exception:  # noqa: BLE001
+        return out
+    for line in (txt or "").split("\n"):
+        m = re.match(r'var hq_str_(fx_s\w+)="(.*)";', line.strip())
+        if not m:
+            continue
+        sym, body = m.group(1), m.group(2)
+        if not body:
+            continue
+        p = body.split(",")
+        if len(p) < 12:
+            continue
+        px, prev = _f(p[8]) or _f(p[2]), _f(p[3])
+        key = "cnh" if sym.endswith("nh") else "cny"
+        out[key] = {"price": px, "prev": prev,
+                    "open": _f(p[5]), "high": _f(p[6]), "low": _f(p[7]),
+                    "pct": _f(p[10]), "name": p[9] if len(p) > 9 else "",
+                    "time": p[0], "date": p[17] if len(p) > 17 else "",
+                    # ★ USDCNY 上涨 = 人民币贬值，方向要在文案里讲清楚，
+                    #   不能让用户自己猜「涨」是人民币强还是弱。
+                    "chg": (px / prev - 1) * 100 if (px and prev) else None}
+    return out
+
+
+def _quiet(fn, *a, **kw):
+    """akshare 的 tqdm 进度条写 stderr，会刷进服务日志 —— 屏蔽掉。"""
+    import contextlib
+    import io as _io
+    try:
+        with contextlib.redirect_stderr(_io.StringIO()):
+            return fn(*a, **kw)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fx_mid_hist() -> list:
+    """央行/中行美元中间价日线（升序）。单位从「每 100 美元」换成「每 1 美元」。"""
+    import akshare as ak
+    start = (_dt.date.today() - _dt.timedelta(days=800)).strftime("%Y%m%d")
+    end = _dt.date.today().strftime("%Y%m%d")
+    df = _quiet(ak.currency_boc_sina, symbol="美元", start_date=start, end_date=end)
+    if df is None or getattr(df, "empty", True):
+        return []
+    col = "央行中间价" if "央行中间价" in df.columns else "中行折算价"
+    bars = []
+    for _, r in df.iterrows():
+        d = str(r.get("日期"))[:10].replace("/", "-")
+        v = _f(r.get(col))
+        if not d or v is None or v <= 0:
+            continue
+        bars.append({"d": d, "c": v / 100.0})
+    bars.sort(key=lambda x: x["d"])
+    return bars
+
+
+def _cn_us_rate() -> dict:
+    """中美国债收益率与 10Y 利差（%）。"""
+    import akshare as ak
+    start = (_dt.date.today() - _dt.timedelta(days=900)).strftime("%Y%m%d")
+    df = _quiet(ak.bond_zh_us_rate, start_date=start)
+    if df is None or getattr(df, "empty", True):
+        return {}
+    rows = []
+    for _, r in df.iterrows():
+        d = str(r.get("日期"))[:10]
+        cn = _f(r.get("中国国债收益率10年"))
+        us = _f(r.get("美国国债收益率10年"))
+        if not d:
+            continue
+        rows.append({"d": d, "cn": cn, "us": us,
+                     "gap": (cn - us) if (cn is not None and us is not None) else None})
+    rows.sort(key=lambda x: x["d"])
+    if not rows:
+        return {}
+    last_gap = next((x for x in reversed(rows) if x["gap"] is not None), None)
+    last_cn = next((x for x in reversed(rows) if x["cn"] is not None), None)
+    last_us = next((x for x in reversed(rows) if x["us"] is not None), None)
+    gaps = [x for x in rows if x["gap"] is not None]
+    gap20 = None
+    if len(gaps) > 21:
+        gap20 = gaps[-1]["gap"] - gaps[-21]["gap"]      # 20 个交易日的变化（bp 需 ×100）
+    return {"rows": rows[-600:], "cn10y": last_cn, "us10y": last_us,
+            "last_gap": last_gap, "gap_chg20": round(gap20, 3) if gap20 is not None else None,
+            "asof": rows[-1]["d"]}
+
+
+def _corr(a: list, b: list) -> Optional[float]:
+    """两条等长序列的 Pearson 相关。"""
+    if len(a) < 30 or len(a) != len(b):
+        return None
+    x = np.array(a, dtype=float)
+    y = np.array(b, dtype=float)
+    m = np.isfinite(x) & np.isfinite(y)
+    if m.sum() < 30:
+        return None
+    x, y = x[m], y[m]
+    if x.std() < 1e-12 or y.std() < 1e-12:
+        return None
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def fx_block(force: bool = False) -> dict:
+    """汇率 + 中美利差 + 它们与沪深300 的历史相关性。"""
+    now = time.time()
+    with _LOCK:
+        c = _FX_CACHE["data"]
+        if not force and c and now - _FX_CACHE["ts"] < _FX_TTL:
+            return c
+
+    t0 = time.time()
+    notes = []
+    spot = _fx_spot()
+    if not spot:
+        notes.append("汇率实时快照不可用")
+    mid = _fx_mid_hist()
+    if not mid:
+        notes.append("央行中间价日线不可用")
+    rate = _cn_us_rate()
+    if not rate:
+        notes.append("中美国债收益率不可用")
+
+    # 汇率变化：用中间价日线（比实时价连续，且是权威口径）
+    chg5 = chg20 = pct250 = None
+    fx_series = []
+    if mid:
+        vals = np.array([x["c"] for x in mid], dtype=float)
+        dates = [x["d"] for x in mid]
+        if len(vals) > 6:
+            chg5 = (vals[-1] / vals[-6] - 1) * 100
+        if len(vals) > 21:
+            chg20 = (vals[-1] / vals[-21] - 1) * 100
+        w = vals[-250:] if len(vals) > 250 else vals
+        pct250 = float((w <= vals[-1]).mean() * 100)
+        step = max(1, len(dates) // 120)
+        fx_series = [{"d": dates[i], "v": round(float(vals[i]), 4)}
+                     for i in range(len(dates))][::step][-120:]
+
+    # 离岸-在岸价差：正值 = 离岸更弱 = 贬值预期
+    cg = None
+    if spot.get("cnh", {}).get("price") and spot.get("cny", {}).get("price"):
+        cnh, cny = spot["cnh"]["price"], spot["cny"]["price"]
+        if cny:
+            cg = (cnh / cny - 1) * 100
+
+    # 历史相关性：汇率 20 日变化 / 利差 20 日变化 分别对沪深300 未来 20 日收益
+    # 历史相关性：汇率 N 日变化 对沪深300 未来 N 日收益（5/20/60 三档）
+    # ★ 只报一个期限等于挑好看的；三个期限方向一致才说明这条关系不是窗口的偶然。
+    corr_fx: dict = {}
+    try:
+        hs = history("sh000300")
+        if hs and mid:
+            hd = {b["date"]: b["close"] for b in hs}
+            hkeys = sorted(hd.keys())
+            for h in (5, 20, 60):
+                xs, ys = [], []
+                for i in range(len(mid) - h):
+                    d, d2 = mid[i]["d"], mid[i + h]["d"]
+                    if d not in hd:
+                        continue
+                    # 用 bisect 找「d2 之后的第一个交易日」，避免 O(n·m) 遍历
+                    k = bisect.bisect_left(hkeys, d2)
+                    if k >= len(hkeys):
+                        break
+                    xs.append((mid[i + h]["c"] / mid[i]["c"] - 1) * 100)
+                    ys.append((hd[hkeys[k]] / hd[d] - 1) * 100)
+                c = _corr(xs, ys)
+                corr_fx[str(h)] = round(c, 3) if c is not None else None
+    except Exception:  # noqa: BLE001
+        pass
+
+    res = {
+        "ok": bool(spot or mid or rate),
+        "spot": spot,
+        "mid": {"value": mid[-1]["c"] if mid else None,
+                "date": mid[-1]["d"] if mid else None,
+                "chg5": round(chg5, 2) if chg5 is not None else None,
+                "chg20": round(chg20, 2) if chg20 is not None else None,
+                "pct250": round(pct250, 1) if pct250 is not None else None,
+                "n": len(mid)},
+        "cnh_gap": round(cg, 3) if cg is not None else None,
+        "rate": {"cn10y": rate.get("cn10y", {}).get("cn"),
+                 "cn_date": rate.get("cn10y", {}).get("d"),
+                 "us10y": rate.get("us10y", {}).get("us"),
+                 "us_date": rate.get("us10y", {}).get("d"),
+                 "gap": rate.get("last_gap", {}).get("gap"),
+                 "gap_date": rate.get("last_gap", {}).get("d"),
+                 "gap_chg20": (round(rate["gap_chg20"] * 100, 1)
+                               if rate.get("gap_chg20") is not None else None)},
+        "series": {"fx": fx_series,
+                   "gap": [{"d": x["d"], "v": round(x["gap"], 3)}
+                           for x in (rate.get("rows") or []) if x["gap"] is not None][-120:]},
+        "corr": {"fx": corr_fx},
+        "notes": notes,
+        "elapsed": round(time.time() - t0, 2),
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "caveats": [
+            "USDCNY 数值上涨 = 人民币贬值（美元变贵），文案里已按这个方向写，别按股市红绿直觉读",
+            "中间价是央行授权公布的官方价，离岸 CNH 是市场价；两者之差反映贬值预期，"
+            "但它也受流动性影响，不等于「官方要贬」",
+            "中美利差 = 中国 10Y − 美国 10Y，负值即倒挂。它是跨境资金方向的**约束条件**，"
+            "不是买卖信号：倒挂也能涨（看国内政策和风险偏好）",
+            "汇率与 A 股的相关性在样本内可能很强，但那是**同期**关系；"
+            "这里算的是「汇率变化 → 未来同期限收益」，三个期限（5/20/60 日）并列给出，"
+            "常不同号，也可能全都接近 0 —— 那就是「这条关系在这段样本里不成立」，照实看数值即可",
+            "本区块**未纳入风险温度的 6 维权重**，只是并列读数",
+        ],
+    }
+    with _LOCK:
+        _FX_CACHE["ts"], _FX_CACHE["data"] = now, res
+    return res
 
 
 # ============ 展示辅助 ============
@@ -1623,7 +2588,7 @@ def run_analysis(force: bool = False) -> dict:
             return _AN_CACHE["data"]
 
     t0 = time.time()
-    prefetch()
+    prefetch(force=force)
     env = build_env(force=force)
     if not env or not env.get("dates"):
         return {"ok": False, "err": "沪深300 历史数据不可用，无法建立分析基准", "signals": []}
@@ -1778,10 +2743,12 @@ def _quote_block(key: str, spot: dict, env: Optional[dict] = None) -> dict:
         if arr is not None and len(arr):
             qq = _arr_last(arr, len(arr) - 1)
     spark = [round(float(x), 4) for x in close[-120:]] if len(close) else []
+    # 日期优先用快照自带的（盘中日K还没生成当天那根，用日K会显示成昨天）
+    qd = str(q.get("date") or "").replace("/", "-")[:10]
     return {"key": key, "name": a["name"], "short": a["short"], "grp": a["grp"],
             "dec": a.get("dec", 2), "unit": a.get("unit", ""), "desc": a.get("desc", ""),
             "price": price, "pct": pct, "q": qq,
-            "date": (dates[-1] if dates else (q.get("date") or "")),
+            "date": qd or (dates[-1] if dates else ""),
             "spark": spark,
             "state": _state_of(a, pct, price, qq)}
 
@@ -1792,7 +2759,7 @@ def panel(force: bool = False) -> dict:
     if not an.get("ok"):
         return an
     spot = fetch_spot(force=force)
-    env = build_env()
+    env = build_env(force=force)
     i = len(env["dates"]) - 1 if env else 0
 
     hero_keys = ["vix", "a50", "brent", "hsi"]
@@ -1820,9 +2787,15 @@ def panel(force: bool = False) -> dict:
                       "hold_chg5": st["hold_chg5"], "rollover": st["rollover"],
                       "under": AMAP[k]["under"],
                       "under_name": AMAP[AMAP[k]["under"]]["name"]})
-            # 年化基差（按当月合约剩余天数近似 30 天）
-            if st["basis_pct"] is not None:
-                b["basis_ann"] = round(st["basis_pct"] * 365.0 / 30.0, 1)
+            # 年化基差：按**该品种当前主力合约的实际剩余天数**，不是固定 30 天
+            ct = _contract_of(k)
+            ann, ok_ann = _ann_basis(st["basis_pct"], ct.get("days"))
+            b["basis_ann"] = ann
+            b["basis_ann_ok"] = ok_ann
+            b["contract"] = ct.get("code")
+            b["contract_expiry"] = ct.get("expiry")
+            b["contract_days"] = ct.get("days")
+            b["contract_src"] = ct.get("src")
         fut.append(b)
 
     # 期限结构
@@ -1893,10 +2866,19 @@ def meta_info() -> dict:
             "股指期货 IF/IH/IC/IM：新浪主连（主力合约拼接，换月日基差跳空已检测剔除）",
         ],
         "caveats": [
-            "基差 = 期货收盘 − 现货收盘，「年化基差」按剩余 30 天近似，仅作横向比较",
-            "主连不是单一合约，换月前后基差不可比；本模块检测到跳空即标记并停用该点",
+            "基差 = 期货收盘 − 现货收盘；「年化基差」按**该品种主力合约的实际剩余"
+            "到期天数**线性年化（ACT/365），不再用固定 30 天",
+            "主力合约的判定：优先用中金所当日成交量最大的合约；拿不到成交数据时"
+            "按「当月第三个周五、提前 7 日移仓」的规则推算（节假日顺延未纳入，≤3 天误差）",
+            "剩余不足 3 个自然日时年化基差不再展示：分母趋零会把噪声放大上百倍，"
+            "那个数字没有意义",
+            "主连不是单一合约。换月跳空按「基差水平的**持久位移**」识别："
+            "跳变 ≥1.2pp，且跳变后 4 日的基差中位数仍保留该幅度的 70% 以上"
+            "（真实的大波动会回归，换月不会）。四个品种在 2000 天里分别命中 6/7/9/12 次，"
+            "只标真正的合约切换，不误伤日常波动",
             "历史标定用沪深300 作基准，样本量 <15 的期限不给结论",
-            "风险温度是多维度加权的结果，只表示「环境松紧」，不是买卖信号",
+            "风险温度是多维度加权的结果，只表示「环境松紧」，不是买卖信号；"
+            "权重已做历史标定，结果与局限见「权重标定」区块",
             "所有指数日K都会落盘缓存，网络故障时用旧数据继续服务并在页脚标注",
         ],
         "terms": {str(k): v for k, v in TERM_NAME.items()},
